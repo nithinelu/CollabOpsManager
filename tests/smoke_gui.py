@@ -1,8 +1,10 @@
 import os, sys, ctypes, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import maint_app, tempfile
+import maint_app, tempfile, json
 _t = tempfile.mkdtemp()
 maint_app.CONFIG = os.path.join(_t, 'config.json'); maint_app.LOG_DIR = os.path.join(_t, 'logs'); maint_app.REPORT_DIR = os.path.join(_t, 'reports')
+LANG = sys.argv[2] if len(sys.argv) > 2 else 'en'
+json.dump({'language': LANG}, open(maint_app.CONFIG, 'w'))
 from PIL import Image
 app = maint_app.App()
 app.nodes = [{"host": "10.0.0.1", "hostname": "cucmpub", "role": "Publisher", "type": "CUCM", "active": "14.0.1.13900-155", "inactive": "12.5.1.16900-48", "cops": ["ciscocm.ucm_ldap.cop.sgn"]},
@@ -22,7 +24,7 @@ def grab(i):
     class BIH(ctypes.Structure): _fields_=[("a",ctypes.c_uint32),("w",ctypes.c_int32),("h",ctypes.c_int32),("p",ctypes.c_uint16),("b",ctypes.c_uint16),("c",ctypes.c_uint32),("s",ctypes.c_uint32),("x",ctypes.c_int32),("y",ctypes.c_int32),("u",ctypes.c_uint32),("i",ctypes.c_uint32)]
     bi = BIH(40, w, -h, 1, 32, 0, 0, 0, 0, 0, 0)
     ctypes.windll.gdi32.GetDIBits(mdc, bmp, 0, h, buf, ctypes.byref(bi), 0)
-    Image.frombuffer("RGBA", (w, h), buf, "raw", "BGRA", 0, 1).convert("RGB").save(os.path.join(out, f"tab{i}.png"))
+    Image.frombuffer("RGBA", (w, h), buf, "raw", "BGRA", 0, 1).convert("RGB").save(os.path.join(out, f"{LANG}_tab{i}.png"))
 for i in range(6):
     app.nb.select(i); app.update(); time.sleep(0.3); grab(i)
 app.destroy(); print("GUI OK")

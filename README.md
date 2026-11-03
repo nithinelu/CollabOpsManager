@@ -18,6 +18,9 @@ Enter the CUC publisher in the **Unity Connection cluster** box on the Cluster t
 * **Health check and dry run:** CUC nodes run `show cuc version`, `show cuc cluster status`, `show cuc dbserver disk` and `show cuc sysinfo`.
 * **Inventory to Excel:** on the Data Export tab, pick *Unity Connection (CUPI REST)*. It exports users, call / directory / interview handlers, distribution lists, COS, templates, partitions, search spaces, routing rules, schedules, phone systems, port groups, ports and mailbox stores, plus any custom `/vmrest/...` path. It needs a CUC application administrator account and only reads (GET).
 
+## Arabic
+Pick **العربية** in the **Language / اللغة** box at the bottom of the window. The window redraws right to left (tabs, forms, tables and buttons mirrored) and keeps what you typed, the logs and a running SFTP server. The activity log and CLI output stay English: they carry CUCM's own messages. Translations are in `i18n.py` (English text is the key).
+
 ## Setup
 1. Run `setup.bat` once. It installs the packages and adds Start Menu and Desktop shortcuts.
 2. On the SFTP Server tab, pick the IP address CUCM uses to reach this PC and click **Allow port in Windows Firewall**.

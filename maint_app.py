@@ -16,7 +16,9 @@ from datetime import datetime
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 
 import cuc_ops
+import i18n
 import cucm_ops as ops
+from i18n import _
 from cucm_cli import CUCMShell, CLIError, run_on_nodes
 from secrets_store import protect, unprotect
 from sftp_server import SFTPServer, local_ipv4_addresses, source_ip_for
@@ -55,11 +57,12 @@ class NodePicker(ttk.Frame):
         self.tree = ttk.Treeview(self, columns=cols, show="headings", height=height, selectmode="none")
         for c, t, w in (("sel", "✓", 34), ("host", "Hostname", 150), ("ip", "IP", 120),
                         ("type", "Type", 70), ("role", "Role", 90), ("status", "Status", 360)):
-            self.tree.heading(c, text=t)
-            self.tree.column(c, width=w, stretch=(c == "status"), anchor="center" if c == "sel" else "w")
-        self.tree.pack(side="left", fill="both", expand=True)
+            self.tree.heading(c, text=_(t))
+            self.tree.column(c, width=w, stretch=(c == "status"), anchor="center" if c == "sel" else app.W)
+        app.mirror(self.tree)
+        self.tree.pack(side=app.S, fill="both", expand=True)
         sb = ttk.Scrollbar(self, orient="vertical", command=self.tree.yview)
-        sb.pack(side="right", fill="y")
+        sb.pack(side=app.E, fill="y")
         self.tree.configure(yscrollcommand=sb.set)
         self.tree.bind("<Button-1>", self._click)
         self.tree.tag_configure("ok", foreground=GREEN)
@@ -82,7 +85,7 @@ class NodePicker(ttk.Frame):
         iid = self.tree.identify_row(ev.y)
         if not iid:
             if self.tree.identify_region(ev.x, ev.y) == "heading" and \
-                    self.tree.identify_column(ev.x) == "#1":
+                    self.tree.column(self.tree.identify_column(ev.x), "id") == "sel":
                 self.checked = set() if len(self.checked) == len(self.app.nodes) else \
                     {n["host"] for n in self.app.nodes}
                 for n in self.app.nodes:
@@ -119,6 +122,7 @@ class App(tk.Tk):
         self.geometry("1180x860")
         self.minsize(980, 700)
         self.cfg = self._load_cfg()
+        i18n.set_language(self.cfg.get("language", "en"))
         self.q = queue.Queue()
         self.nodes = []
         self.pickers = []
@@ -136,6 +140,80 @@ class App(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         if self.cfg.get("sftp_autostart"):
             self.after(300, self.start_sftp)
+
+    # -- right-to-left layout (Arabic) ---------------------------------------
+    @property
+    def rtl(self):
+        return i18n.is_rtl()
+
+    @property
+    def S(self):              # pack side where a row starts
+        return "right" if self.rtl else "left"
+
+    @property
+    def E(self):              # pack side where a row ends
+        return "left" if self.rtl else "right"
+
+    @property
+    def W(self):              # sticky / anchor at the start of a row
+        return "e" if self.rtl else "w"
+
+    @property
+    def X(self):              # sticky / anchor at the end of a row
+        return "w" if self.rtl else "e"
+
+    @property
+    def J(self):              # text justification
+        return "right" if self.rtl else "left"
+
+    def col(self, n, span=1, last=2):
+        """Grid column of a cell that starts n columns from the start of the row."""
+        return last - (n + span - 1) if self.rtl else n
+
+    def mirror(self, tree):
+        """Arabic reads right to left: show a Treeview's columns in reverse order."""
+        if self.rtl:
+            tree["displaycolumns"] = list(tree["columns"])[::-1]
+
+    def _language_picked(self, _e=None):
+        code = next(k for k, v in i18n.LANGUAGES.items() if v == self.lang_cb.get())
+        if code == i18n.language():
+            return
+        if self.busy:
+            self.lang_cb.set(i18n.LANGUAGES[i18n.language()])
+            messagebox.showinfo(APP, _("Please wait for the current operation to finish."))
+            return
+        # Rebuild the whole window in the new language, keeping what was typed,
+        # the logs and the running SFTP server.
+        keep = {name: var.get() for name, var in vars(self).items()
+                if name.startswith("v_") and isinstance(var, tk.Variable)}
+        logs = (self.logbox.get("1.0", "end-1c"), self.clibox.get("1.0", "end-1c"))
+        bk_cur = getattr(self, "_bk_cur", "cucm")
+        self._bk_store()
+        bk = self.bk_settings
+        self._console_disconnect()
+        self._save_cfg()                   # nodes + settings, so the rebuilt tabs load them
+        i18n.set_language(code)
+        self.cfg["language"] = code
+        for w in self.winfo_children():
+            w.destroy()
+        self.pickers = []
+        self.transfers = {}
+        self._style()
+        self._build()
+        self.bk_settings = bk
+        for name, value in keep.items():
+            var = getattr(self, name, None)
+            if isinstance(var, tk.Variable):
+                var.set(value)
+        self._bk_cur = bk_cur              # the restored v_* already hold that cluster's values
+        self._list_backups()
+        for box, text in zip((self.logbox, self.clibox), logs):
+            if text.strip():
+                self._append(box, text + "\n")
+        if self.server and self.server.running:
+            self._sftp_running_ui()
+        self._save_cfg()
 
     # -- config -----------------------------------------------------------
     def _load_cfg(self):
@@ -224,12 +302,12 @@ class App(tk.Tk):
 
     def task(self, title, fn, *args):
         if self.busy:
-            messagebox.showinfo(APP, "Another operation is still running - wait for it or press Stop.")
+            messagebox.showinfo(APP, _("Another operation is still running - wait for it or press Stop."))
             return
         self._save_cfg()
         self.busy = True
         self.cancel.clear()
-        self.status.set(f"Running: {title} ...")
+        self.status.set(_("Running: {title} ...", title=_(title)))
         self.prog.configure(mode="indeterminate")
         self.prog.start(12)
         self.stop_btn.state(["!disabled"])
@@ -239,10 +317,10 @@ class App(tk.Tk):
                 fn(*args)
             except CLIError as e:
                 self.log(f"{title}: {e}")
-                self.ui(messagebox.showerror, APP, f"{title} failed:\n\n{str(e)[:1500]}")
+                self.ui(messagebox.showerror, APP, _("{title} failed:", title=_(title)) + f"\n\n{str(e)[:1500]}")
             except Exception as e:
                 self.log(f"{title}: unexpected error {type(e).__name__}: {e}")
-                self.ui(messagebox.showerror, APP, f"{title} failed:\n\n{e}")
+                self.ui(messagebox.showerror, APP, _("{title} failed:", title=_(title)) + f"\n\n{e}")
             finally:
                 self.ui(self._done)
         threading.Thread(target=_run, daemon=True).start()
@@ -251,7 +329,7 @@ class App(tk.Tk):
         self.busy = False
         self.prog.stop()
         self.prog.configure(mode="determinate", value=0)
-        self.status.set("Ready")
+        self.status.set(_("Ready"))
         self.stop_btn.state(["disabled"])
 
     def stop(self):
@@ -274,7 +352,8 @@ class App(tk.Tk):
         else:
             u, p, where = self.v_osuser.get().strip(), self.v_ospw.get(), "CUCM"
         if not u or not p:
-            raise CLIError(f"Enter the {where} OS (platform) administrator user and password on the Cluster tab.")
+            raise CLIError(_("Enter the {where} OS (platform) administrator user and password on the Cluster tab.",
+                             where=_(where)))
         return u, p
 
     def shell(self, host, cluster=None):
@@ -289,7 +368,7 @@ class App(tk.Tk):
         pub = (self.v_cucpub if cluster == "cuc" else self.v_pub).get().strip()
         if not pub:
             name = "Unity Connection" if cluster == "cuc" else "CUCM"
-            raise CLIError(f"Enter the {name} publisher address on the Cluster tab.")
+            raise CLIError(_("Enter the {name} publisher address on the Cluster tab.", name=_(name)))
         return pub
 
     def publishers(self):
@@ -305,13 +384,13 @@ class App(tk.Tk):
     def sftp_params(self, need_running=True):
         ip = self.v_ip.get().strip()
         if not ip:
-            raise CLIError("Set the 'IP address CUCM uses to reach this PC' on the SFTP Server tab.")
+            raise CLIError(_("Set the 'IP address CUCM uses to reach this PC' on the SFTP Server tab."))
         ref = self.v_pub.get().strip() or self.v_cucpub.get().strip()
         route_ip = source_ip_for(ref) if ref else ""
         if ip not in local_ipv4_addresses() and ip != route_ip:
             # Typical after moving between networks (Wi-Fi / VPN / office LAN).
             if not route_ip:
-                raise CLIError(f"SFTP IP {ip} is not an address of this PC - fix it on the SFTP Server tab.")
+                raise CLIError(_("SFTP IP {ip} is not an address of this PC - fix it on the SFTP Server tab.", ip=ip))
             self.log(f"SFTP IP {ip} is not an address of this PC any more - using {route_ip}, "
                      "the address this PC uses to reach the publisher")
             ip = route_ip
@@ -327,7 +406,7 @@ class App(tk.Tk):
                     break
                 threading.Event().wait(0.1)
             if not (self.server and self.server.running):
-                raise CLIError("The built-in SFTP server is not running (SFTP Server tab).")
+                raise CLIError(_("The built-in SFTP server is not running (SFTP Server tab)."))
         return ip, int(self.v_port.get() or 22), self.v_suser.get().strip(), self.v_spw.get()
 
     def sftp_hint(self, host, since):
@@ -355,7 +434,7 @@ class App(tk.Tk):
         self.configure(bg=BG)
         s = ttk.Style(self)
         s.theme_use("clam")
-        fs = 10
+        fs = 11 if self.rtl else 10          # Arabic is hard to read at 10 pt
         s.configure(".", font=("Segoe UI", fs), background=BG)
         for w in ("TFrame", "TLabel", "TCheckbutton", "TRadiobutton"):
             s.configure(w, background=BG)
@@ -383,28 +462,33 @@ class App(tk.Tk):
         head.pack(fill="x")
         try:
             self._logo = tk.PhotoImage(file=os.path.join(HERE, "app.png"))
-            tk.Label(head, image=self._logo, bg=NAVY).pack(side="left", padx=(14, 8))
+            tk.Label(head, image=self._logo, bg=NAVY).pack(side=self.S, padx=(14, 8))
         except tk.TclError:
-            tk.Label(head, text="☎", font=("Segoe UI Symbol", 18), fg="white", bg=NAVY).pack(side="left", padx=(16, 4))
-        tk.Label(head, text=APP, font=("Segoe UI", 15, "bold"), fg="white", bg=NAVY).pack(side="left")
-        tk.Label(head, text="  CUCM · IM&P · Unity Connection  —  Backup · Upgrade · COP · Export · built-in SFTP",
-                 font=("Segoe UI", 10), fg="#C9D3E6", bg=NAVY).pack(side="left", pady=14)
-        self.sftp_pill = tk.Label(head, text="  ● SFTP stopped  ", font=("Segoe UI", 9, "bold"),
+            tk.Label(head, text="☎", font=("Segoe UI Symbol", 18), fg="white", bg=NAVY).pack(side=self.S, padx=(16, 4))
+        tk.Label(head, text=APP, font=("Segoe UI", 15, "bold"), fg="white", bg=NAVY).pack(side=self.S)
+        tk.Label(head, text="  " + _("CUCM · IM&P · Unity Connection  —  Backup · Upgrade · COP · Export · built-in SFTP"),
+                 font=("Segoe UI", 10), fg="#C9D3E6", bg=NAVY).pack(side=self.S, pady=14)
+        self.sftp_pill = tk.Label(head, text=f"  ● {_('SFTP stopped')}  ", font=("Segoe UI", 9, "bold"),
                                   fg="white", bg="#6B7280")
-        self.sftp_pill.pack(side="right", padx=16)
-        self.conn_pill = tk.Label(head, text="  ● No cluster  ", font=("Segoe UI", 9, "bold"),
+        self.sftp_pill.pack(side=self.E, padx=16)
+        self.conn_pill = tk.Label(head, text=f"  ● {_('No cluster')}  ", font=("Segoe UI", 9, "bold"),
                                   fg="white", bg="#6B7280")
-        self.conn_pill.pack(side="right")
+        self.conn_pill.pack(side=self.E)
 
         bar = ttk.Frame(self, padding=(10, 4))
         bar.pack(side="bottom", fill="x")
-        self.status = tk.StringVar(value="Ready")
-        ttk.Label(bar, textvariable=self.status, style="Muted.TLabel").pack(side="left")
-        self.stop_btn = ttk.Button(bar, text="Stop", style="Danger.TButton", command=self.stop)
-        self.stop_btn.pack(side="right")
+        self.status = tk.StringVar(value=_("Ready"))
+        ttk.Label(bar, textvariable=self.status, style="Muted.TLabel").pack(side=self.S)
+        self.stop_btn = ttk.Button(bar, text=_("Stop"), style="Danger.TButton", command=self.stop)
+        self.stop_btn.pack(side=self.E)
         self.stop_btn.state(["disabled"])
         self.prog = ttk.Progressbar(bar, length=260)
-        self.prog.pack(side="right", padx=10)
+        self.prog.pack(side=self.E, padx=10)
+        self.lang_cb = ttk.Combobox(bar, values=list(i18n.LANGUAGES.values()), state="readonly", width=9)
+        self.lang_cb.set(i18n.LANGUAGES[i18n.language()])
+        self.lang_cb.bind("<<ComboboxSelected>>", self._language_picked)
+        self.lang_cb.pack(side=self.E, padx=(4, 12))
+        ttk.Label(bar, text="Language / اللغة").pack(side=self.E)
 
         pw = ttk.PanedWindow(self, orient="vertical")
         pw.pack(fill="both", expand=True, padx=8, pady=(6, 0))
@@ -414,16 +498,22 @@ class App(tk.Tk):
         lognb = ttk.Notebook(pw)
         pw.add(lognb, weight=1)
         self.logbox = self._console(lognb)
-        lognb.add(self.logbox.holder, text="Activity log")
+        lognb.add(self.logbox.holder, text=_("Activity log"))
         self.clibox = self._console(lognb)
-        lognb.add(self.clibox.holder, text="CLI output")
+        lognb.add(self.clibox.holder, text=_("CLI output"))
 
+        first = None
         for title, builder in (("Cluster", self._tab_cluster), ("SFTP Server", self._tab_sftp),
                                ("Backup (DRS)", self._tab_backup), ("Upgrade / COP", self._tab_upgrade),
                                ("Data Export", self._tab_export), ("CLI Console", self._tab_console)):
             f = ttk.Frame(self.nb, padding=14)
-            self.nb.add(f, text=title)
+            if self.rtl and first is not None:
+                self.nb.insert(0, f, text=_(title))      # tabs read right to left
+            else:
+                self.nb.add(f, text=_(title))
+            first = first or f
             builder(f)
+        self.nb.select(first)
         self.nodes = self.cfg.get("nodes", [])
         self._nodes_changed()
 
@@ -435,12 +525,15 @@ class App(tk.Tk):
         box.holder = fr
         return box
 
-    def _row(self, parent, r, label, var, show=None, width=34, hint=""):
-        ttk.Label(parent, text=label).grid(row=r, column=0, sticky="w", pady=3, padx=(0, 8))
+    def _row(self, parent, r, label, var, show=None, width=34, hint="", last=2):
+        """label | entry | hint, mirrored in Arabic (last = the frame's last grid column)."""
+        ttk.Label(parent, text=_(label)).grid(row=r, column=self.col(0, last=last), sticky=self.W,
+                                              pady=3, padx=(0, 8) if not self.rtl else (8, 0))
         e = ttk.Entry(parent, textvariable=var, width=width, show=show)
-        e.grid(row=r, column=1, sticky="w", pady=3)
+        e.grid(row=r, column=self.col(1, last=last), sticky=self.W, pady=3)
         if hint:
-            ttk.Label(parent, text=hint, style="Muted.TLabel").grid(row=r, column=2, sticky="w", padx=8)
+            ttk.Label(parent, text=_(hint), style="Muted.TLabel").grid(
+                row=r, column=self.col(2, last=last), sticky=self.W, padx=8)
         return e
 
     # ======================================================================
@@ -463,56 +556,58 @@ class App(tk.Tk):
 
         top = ttk.Frame(f)
         top.pack(fill="x")
-        lf = ttk.LabelFrame(top, text="CUCM cluster", padding=10)
-        lf.pack(side="left", fill="y")
+        lf = ttk.LabelFrame(top, text=_("CUCM cluster"), padding=10)
+        lf.pack(side=self.S, fill="y")
         self._row(lf, 0, "Publisher IP / FQDN", self.v_pub, width=24)
         self._row(lf, 1, "OS admin user", self.v_osuser, width=24)
         self._row(lf, 2, "OS admin password", self.v_ospw, show="•", width=24)
         self._row(lf, 3, "AXL user", self.v_axluser, width=24)
         self._row(lf, 4, "AXL password", self.v_axlpw, show="•", width=24)
-        ttk.Label(lf, text="AXL is only for the Excel inventory ('Standard AXL API Access').",
-                  style="Muted.TLabel").grid(row=5, column=0, columnspan=2, sticky="w")
+        ttk.Label(lf, text=_("AXL is only for the Excel inventory ('Standard AXL API Access')."),
+                  style="Muted.TLabel").grid(row=5, column=self.col(0, 2), columnspan=2, sticky=self.W)
 
-        uf = ttk.LabelFrame(top, text="Unity Connection cluster (optional)", padding=10)
-        uf.pack(side="left", fill="y", padx=10)
+        uf = ttk.LabelFrame(top, text=_("Unity Connection cluster (optional)"), padding=10)
+        uf.pack(side=self.S, fill="y", padx=10)
         self._row(uf, 0, "Publisher IP / FQDN", self.v_cucpub, width=24)
         self._row(uf, 1, "OS admin user", self.v_cucosuser, width=24)
         self._row(uf, 2, "OS admin password", self.v_cucospw, show="•", width=24)
         self._row(uf, 3, "CUPI (app admin) user", self.v_cupiuser, width=24)
         self._row(uf, 4, "CUPI password", self.v_cupipw, show="•", width=24)
-        ttk.Label(uf, text="OS admin empty = same as CUCM. CUPI is only for the Excel inventory.",
-                  style="Muted.TLabel").grid(row=5, column=0, columnspan=2, sticky="w")
-        ttk.Checkbutton(f, text="Remember passwords (encrypted for this Windows user)",
-                        variable=self.v_savepw).pack(anchor="w", pady=(6, 0))
+        ttk.Label(uf, text=_("OS admin empty = same as CUCM. CUPI is only for the Excel inventory."),
+                  style="Muted.TLabel").grid(row=5, column=self.col(0, 2), columnspan=2, sticky=self.W)
+        ttk.Checkbutton(f, text=_("Remember passwords (encrypted for this Windows user)"),
+                        variable=self.v_savepw).pack(anchor=self.W, pady=(6, 0))
 
         btns = ttk.Frame(f)
         btns.pack(fill="x", pady=10)
-        ttk.Button(btns, text="Connect & discover nodes", style="Accent.TButton",
-                   command=lambda: self.task("Discover cluster", self._discover)).pack(side="left")
-        ttk.Button(btns, text="Refresh versions",
-                   command=lambda: self.task("Versions", self._versions)).pack(side="left", padx=6)
-        ttk.Button(btns, text="Health check report",
-                   command=lambda: self.task("Health check", self._health, False)).pack(side="left")
-        ttk.Button(btns, text="Health check + diagnose test",
-                   command=lambda: self.task("Health check", self._health, True)).pack(side="left", padx=6)
-        ttk.Button(btns, text="Dry run (no changes)", style="Accent.TButton",
-                   command=lambda: self.task("Dry run", self._dry_run)).pack(side="left", padx=(0, 6))
-        ttk.Button(btns, text="Open reports folder",
-                   command=lambda: os.startfile(REPORT_DIR)).pack(side="left")
+        ttk.Button(btns, text=_("Connect & discover nodes"), style="Accent.TButton",
+                   command=lambda: self.task("Discover cluster", self._discover)).pack(side=self.S)
+        ttk.Button(btns, text=_("Refresh versions"),
+                   command=lambda: self.task("Versions", self._versions)).pack(side=self.S, padx=6)
+        ttk.Button(btns, text=_("Health check report"),
+                   command=lambda: self.task("Health check", self._health, False)).pack(side=self.S)
+        ttk.Button(btns, text=_("Health check + diagnose test"),
+                   command=lambda: self.task("Health check", self._health, True)).pack(side=self.S, padx=6)
+        ttk.Button(btns, text=_("Dry run (no changes)"), style="Accent.TButton",
+                   command=lambda: self.task("Dry run", self._dry_run)).pack(side=self.S, padx=(0, 6))
+        ttk.Button(btns, text=_("Open reports folder"),
+                   command=lambda: os.startfile(REPORT_DIR)).pack(side=self.S)
 
         cols = ("host", "ip", "type", "role", "active", "inactive", "cops")
         self.ctree = ttk.Treeview(f, columns=cols, show="headings", height=7)
         for col, t, w in (("host", "Hostname", 150), ("ip", "IP", 120), ("type", "Type", 70),
                           ("role", "Role", 90), ("active", "Active version", 170),
                           ("inactive", "Inactive version", 170), ("cops", "Installed COP files", 300)):
-            self.ctree.heading(col, text=t)
-            self.ctree.column(col, width=w, stretch=(col == "cops"))
-        self.ctree.pack(fill="both", expand=True)
-        ttk.Label(f, style="Muted.TLabel", justify="left", text=(
+            self.ctree.heading(col, text=_(t))
+            self.ctree.column(col, width=w, stretch=(col == "cops"), anchor=self.W)
+        self.mirror(self.ctree)
+        note = ttk.Label(f, style="Muted.TLabel", justify=self.J, wraplength=0 if self.rtl else 1100, text=_(
             "Nodes come from 'show network cluster' on each publisher (CUCM + IM&P, Unity Connection). "
             "Each cluster's OS admin is used for its own nodes.\nHealth check (pre/post upgrade) runs version, cluster, "
             "status, NTP, DB replication, services and core-dump checks on the nodes checked on the "
-            "Upgrade / COP tab and saves a text report.")).pack(anchor="w", pady=(8, 0))
+            "Upgrade / COP tab and saves a text report."))
+        note.pack(side="bottom", anchor=self.W, pady=(8, 0))
+        self.ctree.pack(fill="both", expand=True)
 
     def _nodes_changed(self):
         self.ctree.delete(*self.ctree.get_children())
@@ -525,15 +620,16 @@ class App(tk.Tk):
         if self.nodes:
             pub = next((n for n in self.nodes if n.get("role") == "Publisher"), self.nodes[0])
             n_cuc = sum(1 for n in self.nodes if cuc_ops.is_cuc(n))
-            extra = f" + {n_cuc} CUC" if n_cuc else ""
-            self.conn_pill.configure(text=f"  ● {pub.get('hostname') or pub['host']}  |  "
-                                          f"{len(self.nodes) - n_cuc} node(s){extra}  ", bg=GREEN)
+            count = (_("{n} node(s) + {c} CUC", n=len(self.nodes) - n_cuc, c=n_cuc) if n_cuc
+                     else _("{n} node(s)", n=len(self.nodes)))
+            self.conn_pill.configure(text=f"  ● {pub.get('hostname') or pub['host']}  |  {count}  ",
+                                     bg=GREEN)
         self._console_nodes()
 
     def _discover(self):
         pubs = {cl: v.get().strip() for cl, v in (("cucm", self.v_pub), ("cuc", self.v_cucpub)) if v.get().strip()}
         if not pubs:
-            raise CLIError("Enter a CUCM and/or Unity Connection publisher address.")
+            raise CLIError(_("Enter a CUCM and/or Unity Connection publisher address."))
         nodes, errors = [], []
         for cl, pub in pubs.items():
             label = "Unity Connection" if cl == "cuc" else "CUCM"
@@ -565,7 +661,7 @@ class App(tk.Tk):
 
     def _versions(self):
         if not self.nodes:
-            raise CLIError("Discover the cluster first.")
+            raise CLIError(_("Discover the cluster first."))
 
         def one(n):
             with self.shell(n["host"]) as sh:
@@ -578,7 +674,7 @@ class App(tk.Tk):
     def _health(self, diagnose):
         nodes = self.up_picker.selected() or self.nodes
         if not nodes:
-            raise CLIError("Discover the cluster first.")
+            raise CLIError(_("Discover the cluster first."))
         path = os.path.join(REPORT_DIR, f"health-{stamp()}.txt")
         parts = {}
 
@@ -688,57 +784,65 @@ class App(tk.Tk):
         self.v_autostart = tk.BooleanVar(value=c.get("sftp_autostart", False))
         self.v_restrict = tk.BooleanVar(value=c.get("sftp_restrict", False))
 
-        lf = ttk.LabelFrame(f, text="Built-in SFTP server", padding=10)
+        lf = ttk.LabelFrame(f, text=_("Built-in SFTP server"), padding=10)
         lf.pack(fill="x")
-        ttk.Label(lf, text="Root folder").grid(row=0, column=0, sticky="w", pady=3)
-        ttk.Entry(lf, textvariable=self.v_root, width=60).grid(row=0, column=1, sticky="we", pady=3)
-        ttk.Button(lf, text="Browse…", command=self._pick_root).grid(row=0, column=2, padx=6)
-        ttk.Button(lf, text="Open", command=lambda: os.startfile(self.root())).grid(row=0, column=3)
-        ttk.Label(lf, text="IP address CUCM uses to reach this PC").grid(row=1, column=0, sticky="w", pady=3, padx=(0, 8))
+        L = 3
+        ttk.Label(lf, text=_("Root folder")).grid(row=0, column=self.col(0, last=L), sticky=self.W, pady=3)
+        ttk.Entry(lf, textvariable=self.v_root, width=60).grid(row=0, column=self.col(1, last=L), sticky="we", pady=3)
+        ttk.Button(lf, text=_("Browse…"), command=self._pick_root).grid(row=0, column=self.col(2, last=L), padx=6)
+        ttk.Button(lf, text=_("Open"), command=lambda: os.startfile(self.root())).grid(row=0, column=self.col(3, last=L))
+        ttk.Label(lf, text=_("IP address CUCM uses to reach this PC")).grid(
+            row=1, column=self.col(0, last=L), sticky=self.W, pady=3, padx=8)
         ipf = ttk.Frame(lf)
-        ipf.grid(row=1, column=1, sticky="w")
-        ttk.Combobox(ipf, textvariable=self.v_ip, values=ips, width=20).pack(side="left")
-        ttk.Button(ipf, text="Detect", command=self._detect_ip).pack(side="left", padx=6)
-        ttk.Label(ipf, text="(the address this PC uses to reach the publisher)",
-                  style="Muted.TLabel").pack(side="left")
-        self._row(lf, 2, "Port", self.v_port, width=8, hint="22 is what CUCM expects (DRS on older releases has no port option)")
-        self._row(lf, 3, "SFTP user", self.v_suser, width=20)
-        self._row(lf, 4, "SFTP password", self.v_spw, width=20, hint="CUCM stores this in the DRS backup device")
-        ttk.Checkbutton(lf, text="Start the SFTP server when the tool opens (needed for scheduled DRS backups)",
-                        variable=self.v_autostart).grid(row=5, column=0, columnspan=3, sticky="w", pady=(6, 0))
-        ttk.Checkbutton(lf, text="Only accept connections from discovered cluster nodes",
-                        variable=self.v_restrict).grid(row=6, column=0, columnspan=3, sticky="w")
-        lf.columnconfigure(1, weight=1)
+        ipf.grid(row=1, column=self.col(1, 3, last=L), columnspan=3, sticky=self.W)
+        ttk.Combobox(ipf, textvariable=self.v_ip, values=ips, width=20).pack(side=self.S)
+        ttk.Button(ipf, text=_("Detect"), command=self._detect_ip).pack(side=self.S, padx=6)
+        ttk.Label(ipf, text=_("(the address this PC uses to reach the publisher)"),
+                  style="Muted.TLabel").pack(side=self.S)
+        self._row(lf, 2, "Port", self.v_port, width=8, last=L,
+                  hint="22 is what CUCM expects (DRS on older releases has no port option)")
+        self._row(lf, 3, "SFTP user", self.v_suser, width=20, last=L)
+        self._row(lf, 4, "SFTP password", self.v_spw, width=20, last=L,
+                  hint="CUCM stores this in the DRS backup device")
+        ttk.Checkbutton(lf, text=_("Start the SFTP server when the tool opens (needed for scheduled DRS backups)"),
+                        variable=self.v_autostart).grid(row=5, column=self.col(0, 4, last=L), columnspan=4,
+                                                        sticky=self.W, pady=(6, 0))
+        ttk.Checkbutton(lf, text=_("Only accept connections from discovered cluster nodes"),
+                        variable=self.v_restrict).grid(row=6, column=self.col(0, 4, last=L), columnspan=4,
+                                                       sticky=self.W)
+        lf.columnconfigure(self.col(1, last=L), weight=1)
 
         b = ttk.Frame(f)
         b.pack(fill="x", pady=10)
-        self.sftp_start_btn = ttk.Button(b, text="Start SFTP server", style="Accent.TButton", command=self.start_sftp)
-        self.sftp_start_btn.pack(side="left")
-        self.sftp_stop_btn = ttk.Button(b, text="Stop", command=self.stop_sftp)
-        self.sftp_stop_btn.pack(side="left", padx=6)
+        self.sftp_start_btn = ttk.Button(b, text=_("Start SFTP server"), style="Accent.TButton", command=self.start_sftp)
+        self.sftp_start_btn.pack(side=self.S)
+        self.sftp_stop_btn = ttk.Button(b, text=_("Stop"), command=self.stop_sftp)
+        self.sftp_stop_btn.pack(side=self.S, padx=6)
         self.sftp_stop_btn.state(["disabled"])
-        ttk.Button(b, text="Allow port in Windows Firewall (admin)", command=self._firewall).pack(side="left", padx=12)
+        ttk.Button(b, text=_("Allow port in Windows Firewall (admin)"), command=self._firewall).pack(side=self.S, padx=12)
         self.sftp_info = ttk.Label(b, text="", style="Muted.TLabel")
-        self.sftp_info.pack(side="left", padx=10)
+        self.sftp_info.pack(side=self.S, padx=10)
 
-        ttk.Label(f, text="Transfers", style="Head.TLabel").pack(anchor="w")
+        ttk.Label(f, text=_("Transfers"), style="Head.TLabel").pack(anchor=self.W)
         cols = ("time", "peer", "file", "dir", "size")
         self.xtree = ttk.Treeview(f, columns=cols, show="headings", height=8)
         for col, t, w in (("time", "Time", 80), ("peer", "CUCM node", 120), ("file", "File", 420),
                           ("dir", "Direction", 120), ("size", "Bytes", 110)):
-            self.xtree.heading(col, text=t)
-            self.xtree.column(col, width=w, stretch=(col == "file"))
-        self.xtree.pack(fill="both", expand=True)
-        ttk.Label(f, style="Muted.TLabel", justify="left", text=(
+            self.xtree.heading(col, text=_(t))
+            self.xtree.column(col, width=w, stretch=(col == "file"), anchor=self.W)
+        self.mirror(self.xtree)
+        note = ttk.Label(f, style="Muted.TLabel", justify=self.J, wraplength=0 if self.rtl else 1100, text=_(
             "Folders under the root: backup\\ (DRS backups land here), upgrade\\ (put ISO / COP files here), "
             "export\\ (file get exports).\nCUCM sees the root as '/', e.g. backup directory '/backup', "
-            "upgrade directory '/upgrade'.")).pack(anchor="w", pady=(6, 0))
+            "upgrade directory '/upgrade'."))
+        note.pack(side="bottom", anchor=self.W, pady=(6, 0))
+        self.xtree.pack(fill="both", expand=True)
 
     def _detect_ip(self):
         pub = self.v_pub.get().strip()
         ip = source_ip_for(pub) if pub else ""
         if not ip:
-            messagebox.showwarning(APP, "Enter the publisher on the Cluster tab first (and check it resolves).")
+            messagebox.showwarning(APP, _("Enter the publisher on the Cluster tab first (and check it resolves)."))
             return
         self.v_ip.set(ip)
         self.log(f"SFTP IP set to {ip} (route to {pub})")
@@ -753,7 +857,7 @@ class App(tk.Tk):
             return
         user, pw = self.v_suser.get().strip(), self.v_spw.get()
         if not user or len(pw) < 6:
-            messagebox.showerror(APP, "Set an SFTP user and a password of at least 6 characters.")
+            messagebox.showerror(APP, _("Set an SFTP user and a password of at least 6 characters."))
             return
         for sub in ("backup", "upgrade", "export"):
             self.root(sub)
@@ -768,10 +872,14 @@ class App(tk.Tk):
             messagebox.showerror(APP, str(e))
             return
         self._save_cfg()
+        self._sftp_running_ui()
+
+    def _sftp_running_ui(self):
         self.sftp_start_btn.state(["disabled"])
         self.sftp_stop_btn.state(["!disabled"])
         self.sftp_pill.configure(text=f"  ● SFTP {self.v_ip.get()}:{self.v_port.get()}  ", bg=GREEN)
-        self.sftp_info.configure(text=f"Running - CUCM connects to {self.v_ip.get()} as {user}", style="Ok.TLabel")
+        self.sftp_info.configure(text=_("Running - CUCM connects to {ip} as {user}", ip=self.v_ip.get(),
+                                        user=self.v_suser.get().strip()), style="Ok.TLabel")
 
     def stop_sftp(self):
         if self.server:
@@ -779,13 +887,13 @@ class App(tk.Tk):
         self.server = None
         self.sftp_start_btn.state(["!disabled"])
         self.sftp_stop_btn.state(["disabled"])
-        self.sftp_pill.configure(text="  ● SFTP stopped  ", bg="#6B7280")
-        self.sftp_info.configure(text="Stopped", style="Muted.TLabel")
+        self.sftp_pill.configure(text=f"  ● {_('SFTP stopped')}  ", bg="#6B7280")
+        self.sftp_info.configure(text=_("Stopped"), style="Muted.TLabel")
 
     def _sftp_progress(self, peer, path, kind, nbytes):
         def _do():
             key = (peer, path)
-            label = {"upload": "CUCM → PC", "download": "PC → CUCM"}.get(kind)
+            label = {"upload": _("CUCM → PC"), "download": _("PC → CUCM")}.get(kind)
             if key in self.transfers and self.xtree.exists(self.transfers[key]):
                 iid = self.transfers[key]
                 self.xtree.set(iid, "size", f"{nbytes:,}")
@@ -828,15 +936,15 @@ class App(tk.Tk):
         self.v_feat = tk.StringVar(value=b["features"])
         self.v_bkdir = tk.StringVar(value=b["dir"])
 
-        lf = ttk.LabelFrame(f, text="DRS backup to the built-in SFTP server (runs on the cluster's publisher)",
+        lf = ttk.LabelFrame(f, text=_("DRS backup to the built-in SFTP server (runs on the cluster's publisher)"),
                             padding=10)
         lf.pack(fill="x")
-        ttk.Label(lf, text="Cluster").grid(row=0, column=0, sticky="w", pady=3)
+        ttk.Label(lf, text=_("Cluster")).grid(row=0, column=self.col(0), sticky=self.W, pady=3)
         rb = ttk.Frame(lf)
-        rb.grid(row=0, column=1, columnspan=2, sticky="w")
+        rb.grid(row=0, column=self.col(1, 2), columnspan=2, sticky=self.W)
         for val, text in (("cucm", "CUCM / IM&P"), ("cuc", "Unity Connection")):
-            ttk.Radiobutton(rb, text=text, value=val, variable=self.v_bkcl,
-                            command=self._bk_switch).pack(side="left", padx=(0, 14))
+            ttk.Radiobutton(rb, text=_(text), value=val, variable=self.v_bkcl,
+                            command=self._bk_switch).pack(side=self.S, padx=(0, 14))
         self._row(lf, 1, "Backup device name", self.v_dev, width=24)
         self._row(lf, 2, "Directory on SFTP", self.v_bkdir, width=24,
                   hint="/backup = <root>\\backup (use a separate folder per cluster)")
@@ -846,42 +954,44 @@ class App(tk.Tk):
 
         b = ttk.Frame(f)
         b.pack(fill="x", pady=10)
-        ttk.Button(b, text="Run backup now", style="Accent.TButton",
-                   command=lambda: self.task("DRS backup", self._backup)).pack(side="left")
-        ttk.Button(b, text="Create / update backup device",
-                   command=lambda: self.task("DRS device", self._backup_device)).pack(side="left", padx=6)
+        ttk.Button(b, text=_("Run backup now"), style="Accent.TButton",
+                   command=lambda: self.task("DRS backup", self._backup)).pack(side=self.S)
+        ttk.Button(b, text=_("Create / update backup device"),
+                   command=lambda: self.task("DRS device", self._backup_device)).pack(side=self.S, padx=6)
         for text, fn in (("Status", lambda sh: ops.drs_status(sh)["raw"]),
                          ("History", ops.drs_history), ("Device list", ops.drs_device_list),
                          ("Schedules", ops.drs_schedule_list),
                          ("Registered features", self._drs_registration)):
-            ttk.Button(b, text=text, command=lambda t=text, fn=fn: self.task(
-                f"DRS {t.lower()}", self._pub_cmd, fn, f"DRS {t}")).pack(side="left", padx=2)
-        ttk.Button(b, text="Cancel running backup", style="Danger.TButton",
-                   command=self._cancel_backup).pack(side="right")
+            ttk.Button(b, text=_(text), command=lambda t=text, fn=fn: self.task(
+                f"DRS {t.lower()}", self._pub_cmd, fn, f"DRS {t}")).pack(side=self.S, padx=2)
 
-        sf = ttk.Frame(f)
+        sf = ttk.Frame(f)                  # progress line: status · progress · cancel
         sf.pack(fill="x")
         self.bk_status = ttk.Label(sf, text="", style="Head.TLabel")
-        self.bk_status.pack(side="left")
+        self.bk_status.pack(side=self.S)
+        ttk.Button(sf, text=_("Cancel running backup"), style="Danger.TButton",
+                   command=self._cancel_backup).pack(side=self.E)
         self.bk_prog = ttk.Progressbar(sf, length=300, maximum=100)
-        self.bk_prog.pack(side="right")
+        self.bk_prog.pack(side=self.E, padx=10)
 
         cols = ("comp", "server", "feature", "state")
         self.bk_tree = ttk.Treeview(f, columns=cols, show="headings", height=5)
         for col, t in zip(cols, ("Feature", "Server", "Component", "Result")):
-            self.bk_tree.heading(col, text=t)
-            self.bk_tree.column(col, width=160)
+            self.bk_tree.heading(col, text=_(t))
+            self.bk_tree.column(col, width=160, anchor=self.W)
+        self.mirror(self.bk_tree)
         self.bk_tree.pack(fill="x", pady=6)
 
         hdr = ttk.Frame(f)
         hdr.pack(fill="x")
-        ttk.Label(hdr, text="Backups on this PC", style="Head.TLabel").pack(side="left")
-        ttk.Button(hdr, text="Refresh", command=self._list_backups).pack(side="right")
-        ttk.Button(hdr, text="Open folder", command=lambda: os.startfile(self._bk_local())).pack(side="right", padx=6)
+        ttk.Label(hdr, text=_("Backups on this PC"), style="Head.TLabel").pack(side=self.S)
+        ttk.Button(hdr, text=_("Refresh"), command=self._list_backups).pack(side=self.E)
+        ttk.Button(hdr, text=_("Open folder"), command=lambda: os.startfile(self._bk_local())).pack(side=self.E, padx=6)
         self.bl_tree = ttk.Treeview(f, columns=("name", "size", "time"), show="headings", height=6)
         for col, t, w in (("name", "File", 420), ("size", "Size", 110), ("time", "Modified", 160)):
-            self.bl_tree.heading(col, text=t)
-            self.bl_tree.column(col, width=w, stretch=(col == "name"))
+            self.bl_tree.heading(col, text=_(t))
+            self.bl_tree.column(col, width=w, stretch=(col == "name"), anchor=self.W)
+        self.mirror(self.bl_tree)
         self.bl_tree.pack(fill="both", expand=True)
         self.after(500, self._list_backups)
 
@@ -952,7 +1062,7 @@ class App(tk.Tk):
 
             def show(st):
                 def _do():
-                    self.bk_status.configure(text=f"{st['status'] or 'Running'}  {st['tar']}")
+                    self.bk_status.configure(text=f"{st['status'] or _('Running')}  {st['tar']}")
                     if st["percent"] is not None:
                         self.bk_prog.configure(value=st["percent"])
                     self.bk_tree.delete(*self.bk_tree.get_children())
@@ -964,10 +1074,11 @@ class App(tk.Tk):
         self.log(f"Backup finished: {st['status']}\n{st['raw']}")
         self.ui(self._list_backups)
         self.ui(messagebox.showinfo if ok else messagebox.showwarning, APP,
-                f"DRS backup finished: {st['status']}\nTar file: {st['tar']}")
+                _("DRS backup finished: {status}\nTar file: {tar}", status=st["status"], tar=st["tar"]))
 
     def _cancel_backup(self):
-        if messagebox.askyesno(APP, f"Cancel the DRS backup running on the {'Unity Connection' if self._bk_cur == 'cuc' else 'CUCM'} publisher?"):
+        if messagebox.askyesno(APP, _("Cancel the DRS backup running on the Unity Connection publisher?")
+                               if self._bk_cur == "cuc" else _("Cancel the DRS backup running on the CUCM publisher?")):
             threading.Thread(target=lambda: self._safe(self._pub_cmd, ops.drs_cancel, "Cancel backup"),
                              daemon=True).start()
 
@@ -986,51 +1097,51 @@ class App(tk.Tk):
         top = ttk.Frame(f)
         top.pack(fill="both", expand=True)
 
-        left = ttk.LabelFrame(top, text="Files in <root>\\upgrade (CUCM directory /upgrade)", padding=8)
-        left.pack(side="left", fill="both", expand=True)
+        left = ttk.LabelFrame(top, text=_("Files in <root>\\upgrade (CUCM directory /upgrade)"), padding=8)
+        left.pack(side=self.S, fill="both", expand=True)
         self.uf_tree = ttk.Treeview(left, columns=("name", "size"), show="headings", height=7, selectmode="browse")
-        self.uf_tree.heading("name", text="ISO / COP file")
-        self.uf_tree.heading("size", text="Size")
-        self.uf_tree.column("name", width=380)
-        self.uf_tree.column("size", width=90)
+        self.uf_tree.heading("name", text=_("ISO / COP file"))
+        self.uf_tree.heading("size", text=_("Size"))
+        self.uf_tree.column("name", width=380, anchor=self.W)
+        self.uf_tree.column("size", width=90, anchor=self.W)
+        self.mirror(self.uf_tree)
         self.uf_tree.pack(fill="both", expand=True)
         ub = ttk.Frame(left)
         ub.pack(fill="x", pady=(6, 0))
-        ttk.Button(ub, text="Add files…", command=self._add_upgrade_files).pack(side="left")
-        ttk.Button(ub, text="Refresh", command=self._list_upgrade_files).pack(side="left", padx=4)
-        ttk.Button(ub, text="Checksum (SHA-512 / MD5)",
-                   command=lambda: self.task("Checksum", self._checksum)).pack(side="left")
-        ttk.Button(ub, text="Open folder", command=lambda: os.startfile(self.root("upgrade"))).pack(side="left", padx=4)
+        ttk.Button(ub, text=_("Add files…"), command=self._add_upgrade_files).pack(side=self.S)
+        ttk.Button(ub, text=_("Refresh"), command=self._list_upgrade_files).pack(side=self.S, padx=4)
+        ttk.Button(ub, text=_("Checksum (SHA-512 / MD5)"),
+                   command=lambda: self.task("Checksum", self._checksum)).pack(side=self.S)
+        ttk.Button(ub, text=_("Open folder"), command=lambda: os.startfile(self.root("upgrade"))).pack(side=self.S, padx=4)
 
-        right = ttk.LabelFrame(top, text="Options", padding=8)
-        right.pack(side="left", fill="y", padx=(10, 0))
-        ttk.Checkbutton(right, text="Switch version automatically after\na successful upgrade (node reboots)",
-                        variable=self.v_switch).pack(anchor="w")
-        ttk.Label(right, text="Run on the checked nodes:").pack(anchor="w", pady=(10, 0))
-        ttk.Radiobutton(right, text="One after another (publisher first)", value="sequential",
-                        variable=self.v_mode).pack(anchor="w")
-        ttk.Radiobutton(right, text="All at the same time", value="parallel",
-                        variable=self.v_mode).pack(anchor="w")
-        ttk.Label(right, style="Muted.TLabel", justify="left", wraplength=280, text=(
+        right = ttk.LabelFrame(top, text=_("Options"), padding=8)
+        right.pack(side=self.S, fill="y", padx=(0, 10) if self.rtl else (10, 0))
+        ttk.Checkbutton(right, text=_("Switch version automatically after\na successful upgrade (node reboots)"),
+                        variable=self.v_switch).pack(anchor=self.W)
+        ttk.Label(right, text=_("Run on the checked nodes:")).pack(anchor=self.W, pady=(10, 0))
+        ttk.Radiobutton(right, text=_("One after another (publisher first)"), value="sequential",
+                        variable=self.v_mode).pack(anchor=self.W)
+        ttk.Radiobutton(right, text=_("All at the same time"), value="parallel",
+                        variable=self.v_mode).pack(anchor=self.W)
+        ttk.Label(right, style="Muted.TLabel", justify=self.J, wraplength=280, text=_(
             "COP files: usually all nodes, parallel is fine.\nUpgrades: publisher first, then subscribers. "
             "Leave auto-switch off and use Switch version in the maintenance window "
-            "(publisher first, wait for it to come up, then subscribers).")).pack(anchor="w", pady=(10, 0))
+            "(publisher first, wait for it to come up, then subscribers).")).pack(anchor=self.W, pady=(10, 0))
 
-        ttk.Label(f, text="Target nodes (click to check / uncheck, click ✓ header for all)",
-                  style="Head.TLabel").pack(anchor="w", pady=(10, 2))
+        ttk.Label(f, text=_("Target nodes (click to check / uncheck, click ✓ header for all)"),
+                  style="Head.TLabel").pack(anchor=self.W, pady=(10, 2))
+        b = ttk.Frame(f)
+        b.pack(side="bottom", fill="x", pady=(8, 0))
         self.up_picker = NodePicker(f, self, height=5)
         self.up_picker.pack(fill="both", expand=True)
-
-        b = ttk.Frame(f)
-        b.pack(fill="x", pady=(8, 0))
-        ttk.Button(b, text="Install selected file on checked nodes", style="Accent.TButton",
-                   command=self._install).pack(side="left")
-        ttk.Button(b, text="Upgrade status",
-                   command=lambda: self.task("Upgrade status", self._on_nodes, ops.upgrade_status, "upgrade status")).pack(side="left", padx=6)
-        ttk.Button(b, text="Show versions",
-                   command=lambda: self.task("Versions", self._versions)).pack(side="left")
-        ttk.Button(b, text="Switch version on checked nodes…", style="Danger.TButton",
-                   command=self._switch).pack(side="right")
+        ttk.Button(b, text=_("Install selected file on checked nodes"), style="Accent.TButton",
+                   command=self._install).pack(side=self.S)
+        ttk.Button(b, text=_("Upgrade status"),
+                   command=lambda: self.task("Upgrade status", self._on_nodes, ops.upgrade_status, "upgrade status")).pack(side=self.S, padx=6)
+        ttk.Button(b, text=_("Show versions"),
+                   command=lambda: self.task("Versions", self._versions)).pack(side=self.S)
+        ttk.Button(b, text=_("Switch version on checked nodes…"), style="Danger.TButton",
+                   command=self._switch).pack(side=self.E)
         self.after(400, self._list_upgrade_files)
 
     def _list_upgrade_files(self):
@@ -1039,8 +1150,8 @@ class App(tk.Tk):
             self.uf_tree.insert("", "end", iid=name, values=(name, fmt_size(size)))
 
     def _add_upgrade_files(self):
-        paths = filedialog.askopenfilenames(title="Select CUCM upgrade ISO / COP files", filetypes=[
-            ("CUCM upgrade / COP", "*.iso *.cop *.sgn *.sha512"), ("All files", "*.*")])
+        paths = filedialog.askopenfilenames(title=_("Select CUCM upgrade ISO / COP files"), filetypes=[
+            (_("CUCM upgrade / COP"), "*.iso *.cop *.sgn *.sha512"), (_("All files"), "*.*")])
         if not paths:
             return
         dest = self.root("upgrade")
@@ -1055,7 +1166,7 @@ class App(tk.Tk):
     def _sel_file(self):
         sel = self.uf_tree.selection()
         if not sel:
-            raise CLIError("Select an ISO / COP file in the list first.")
+            raise CLIError(_("Select an ISO / COP file in the list first."))
         return sel[0]
 
     def _checksum(self):
@@ -1074,15 +1185,17 @@ class App(tk.Tk):
             name = self._sel_file()
             nodes = self.up_picker.selected()
             if not nodes:
-                raise CLIError("Check at least one target node.")
+                raise CLIError(_("Check at least one target node."))
         except CLIError as e:
             messagebox.showwarning(APP, str(e))
             return
         is_cop = ".cop" in name.lower()
-        kind = "COP file" if is_cop else "UPGRADE"
-        extra = "" if is_cop else ("\n\nThe nodes will REBOOT into the new version when done." if self.v_switch.get()
-                                   else "\n\nThe new version goes to the inactive partition (no reboot).")
-        if not messagebox.askyesno(APP, f"Install {kind}\n\n{name}\n\non {len(nodes)} node(s):\n"
+        kind = _("COP file") if is_cop else _("UPGRADE")
+        extra = "" if is_cop else ("\n\n" + (_("The nodes will REBOOT into the new version when done.")
+                                             if self.v_switch.get() else
+                                             _("The new version goes to the inactive partition (no reboot).")))
+        if not messagebox.askyesno(APP, _("Install {kind}", kind=kind) + f"\n\n{name}\n\n"
+                                        + _("on {n} node(s):", n=len(nodes)) + "\n"
                                         + "\n".join(f"  • {n.get('hostname')} ({n['host']})" for n in nodes) + extra):
             return
         self.task(f"Install {name}", self._install_run, name, nodes)
@@ -1094,16 +1207,16 @@ class App(tk.Tk):
 
         def one(n):
             host = n["host"]
-            picker.set_status(host, "connecting…", "run")
+            picker.set_status(host, _("connecting…"), "run")
             with self.shell(host) as sh:
-                picker.set_status(host, f"installing {name} …", "run")
+                picker.set_status(host, _("installing {name} …", name=name), "run")
                 ok, out = ops.upgrade_initiate(sh, ip, user, pw, "/upgrade", name, auto_switch=auto,
                                                sftp_port=port, on_output=self.cli_out(host), cancel=self.cancel)
             tail = [ln for ln in out.splitlines() if ln.strip()][-1:] or [""]
             picker.set_status(host, ("✓ " if ok else "? ") + tail[0][:120], "ok" if ok else "bad")
             self.log(f"[{host}] install {name}: {'success' if ok else 'finished - check CLI output'}")
             if not ok:
-                raise CLIError("installation result not confirmed - see CLI output tab")
+                raise CLIError(_("installation result not confirmed - see CLI output tab"))
 
         order = sorted(nodes, key=lambda n: (n.get("role") != "Publisher", n.get("type") != "CUCM"))
         if self.v_mode.get() == "parallel":
@@ -1127,11 +1240,11 @@ class App(tk.Tk):
     def _switch(self):
         nodes = self.up_picker.selected()
         if not nodes:
-            messagebox.showwarning(APP, "Check the nodes to switch.")
+            messagebox.showwarning(APP, _("Check the nodes to switch."))
             return
-        if not messagebox.askyesno(APP, "Switch version and REBOOT on:\n" + "\n".join(
-                f"  • {n.get('hostname')} ({n['host']})" for n in nodes) +
-                "\n\nThis interrupts call processing on these nodes. Continue?", icon="warning"):
+        if not messagebox.askyesno(APP, _("Switch version and REBOOT on:") + "\n" + "\n".join(
+                f"  • {n.get('hostname')} ({n['host']})" for n in nodes) + "\n\n" +
+                _("This interrupts call processing on these nodes. Continue?"), icon="warning"):
             return
         self.task("Switch version", self._on_nodes, lambda sh: ops.switch_version(sh, sh._cb),
                   "switch-version", nodes, False)
@@ -1139,14 +1252,14 @@ class App(tk.Tk):
     def _on_nodes(self, fn, title, nodes=None, parallel=True):
         nodes = nodes or self.up_picker.selected()
         if not nodes:
-            raise CLIError("Check at least one node.")
+            raise CLIError(_("Check at least one node."))
 
         def one(n):
             with self.shell(n["host"]) as sh:
                 sh._cb = self.cli_out(n["host"])
                 out = fn(sh)
             self.log(f"[{n['host']}] {title}:\n{out}")
-            self.up_picker.set_status(n["host"], f"{title}: done", "ok")
+            self.up_picker.set_status(n["host"], _("{title}: done", title=title), "ok")
         run_on_nodes(nodes, one, parallel=parallel, log=self.log)
 
     # ======================================================================
@@ -1160,50 +1273,54 @@ class App(tk.Tk):
         self.v_spec = tk.StringVar()
         self.v_opt = tk.StringVar()
 
-        lf = ttk.LabelFrame(f, text="Files from the nodes ('file get' to the built-in SFTP server)", padding=10)
+        lf = ttk.LabelFrame(f, text=_("Files from the nodes ('file get' to the built-in SFTP server)"), padding=10)
         lf.pack(fill="x")
-        ttk.Label(lf, text="What").grid(row=0, column=0, sticky="w")
+        L = 3
+        ttk.Label(lf, text=_("What")).grid(row=0, column=self.col(0, last=L), sticky=self.W, padx=4)
         cb = ttk.Combobox(lf, textvariable=self.v_preset, values=list(self.file_presets), state="readonly", width=44)
-        cb.grid(row=0, column=1, columnspan=3, sticky="w", pady=3)
+        cb.grid(row=0, column=self.col(1, 3, last=L), columnspan=3, sticky=self.W, pady=3)
         cb.bind("<<ComboboxSelected>>", lambda e: self._preset())
-        ttk.Label(lf, text="Location").grid(row=1, column=0, sticky="w")
+        ttk.Label(lf, text=_("Location")).grid(row=1, column=self.col(0, last=L), sticky=self.W, padx=4)
         ttk.Combobox(lf, textvariable=self.v_loc, values=["activelog", "inactivelog", "install", "tftp",
-                                                          "partBtr", "salog"], width=12).grid(row=1, column=1, sticky="w")
-        ttk.Label(lf, text="File spec").grid(row=1, column=2, sticky="e", padx=(10, 4))
-        ttk.Entry(lf, textvariable=self.v_spec, width=40).grid(row=1, column=3, sticky="w")
-        ttk.Label(lf, text="Options").grid(row=2, column=0, sticky="w")
-        ttk.Entry(lf, textvariable=self.v_opt, width=40).grid(row=2, column=1, columnspan=3, sticky="w", pady=3)
-        ttk.Label(lf, style="Muted.TLabel", text="e.g. reltime hours 2  |  abstime 09:00:10/27/26 11:00:10/27/26  |  "
-                  "match <regex>  |  recurs").grid(row=3, column=1, columnspan=3, sticky="w")
+                                                          "partBtr", "salog"], width=12).grid(
+            row=1, column=self.col(1, last=L), sticky=self.W)
+        ttk.Label(lf, text=_("File spec")).grid(row=1, column=self.col(2, last=L), sticky=self.X, padx=(10, 4))
+        ttk.Entry(lf, textvariable=self.v_spec, width=40).grid(row=1, column=self.col(3, last=L), sticky=self.W)
+        ttk.Label(lf, text=_("Options")).grid(row=2, column=self.col(0, last=L), sticky=self.W, padx=4)
+        ttk.Entry(lf, textvariable=self.v_opt, width=40).grid(row=2, column=self.col(1, 3, last=L), columnspan=3,
+                                                              sticky=self.W, pady=3)
+        ttk.Label(lf, style="Muted.TLabel", text=_("e.g.") + "  reltime hours 2  |  abstime 09:00:10/27/26 "
+                  "11:00:10/27/26  |  match <regex>  |  recurs").grid(
+            row=3, column=self.col(1, 3, last=L), columnspan=3, sticky=self.W)
         self._preset()
 
         self.ex_picker = NodePicker(f, self, height=4, default_all=False)
         self.ex_picker.pack(fill="x", pady=6)
         eb = ttk.Frame(f)
         eb.pack(fill="x")
-        ttk.Button(eb, text="Export files from checked nodes", style="Accent.TButton",
-                   command=lambda: self.task("File export", self._file_export)).pack(side="left")
-        ttk.Button(eb, text="Open export folder", command=lambda: os.startfile(self.root("export"))).pack(side="left", padx=6)
+        ttk.Button(eb, text=_("Export files from checked nodes"), style="Accent.TButton",
+                   command=lambda: self.task("File export", self._file_export)).pack(side=self.S)
+        ttk.Button(eb, text=_("Open export folder"), command=lambda: os.startfile(self.root("export"))).pack(side=self.S, padx=6)
 
-        af = ttk.LabelFrame(f, text="Configuration inventory to Excel (publisher)", padding=10)
+        af = ttk.LabelFrame(f, text=_("Configuration inventory to Excel (publisher)"), padding=10)
         af.pack(fill="both", expand=True, pady=(10, 0))
         self.v_invsrc = tk.StringVar(value="cucm")
         src = ttk.Frame(af)
         src.pack(fill="x", pady=(0, 6))
         for val, text in (("cucm", "CUCM (AXL SQL)"), ("cuc", "Unity Connection (CUPI REST)")):
-            ttk.Radiobutton(src, text=text, value=val, variable=self.v_invsrc,
-                            command=self._inv_source).pack(side="left", padx=(0, 14))
+            ttk.Radiobutton(src, text=_(text), value=val, variable=self.v_invsrc,
+                            command=self._inv_source).pack(side=self.S, padx=(0, 14))
         self.sql_list = tk.Listbox(af, selectmode="multiple", height=7, exportselection=False,
                                    font=("Segoe UI", 10), relief="solid", bd=1)
-        self.sql_list.pack(side="left", fill="y")
+        self.sql_list.pack(side=self.S, fill="y")
         rf = ttk.Frame(af)
-        rf.pack(side="left", fill="both", expand=True, padx=(10, 0))
+        rf.pack(side=self.S, fill="both", expand=True, padx=(0, 10) if self.rtl else (10, 0))
         self.custom_lbl = ttk.Label(rf, text="")
-        self.custom_lbl.pack(anchor="w")
+        self.custom_lbl.pack(anchor=self.W)
+        ttk.Button(rf, text=_("Export inventory to Excel…"), style="Accent.TButton",
+                   command=self._sql_export).pack(side="bottom", anchor=self.W, pady=(6, 0))
         self.sql_custom = tk.Text(rf, height=5, font=("Consolas", 9), relief="solid", bd=1)
         self.sql_custom.pack(fill="both", expand=True)
-        ttk.Button(rf, text="Export inventory to Excel…", style="Accent.TButton",
-                   command=self._sql_export).pack(anchor="w", pady=(6, 0))
         self._inv_source()
 
     def _inv_source(self):
@@ -1212,8 +1329,8 @@ class App(tk.Tk):
         for name in (cuc_ops.CUPI_PRESETS if cuc else ops.SQL_PRESETS):
             self.sql_list.insert("end", name)
         self.sql_list.select_set(0, "end")
-        self.custom_lbl.configure(text="Custom CUPI path (optional, e.g. /vmrest/users?query=(alias%20startswith%20a)):"
-                                  if cuc else "Custom SQL (optional, added as sheet 'Custom'):")
+        self.custom_lbl.configure(text=_("Custom CUPI path (optional, e.g. /vmrest/users?query=(alias%20startswith%20a)):")
+                                  if cuc else _("Custom SQL (optional, added as sheet 'Custom'):"))
         self.sql_custom.delete("1.0", "end")
 
     def _preset(self):
@@ -1225,10 +1342,10 @@ class App(tk.Tk):
     def _file_export(self):
         nodes = self.ex_picker.selected()
         if not nodes:
-            raise CLIError("Check the node(s) to export from.")
+            raise CLIError(_("Check the node(s) to export from."))
         loc, spec, opt = self.v_loc.get().strip(), self.v_spec.get().strip(), self.v_opt.get().strip()
         if not loc or not spec:
-            raise CLIError("Enter a location and a file spec.")
+            raise CLIError(_("Enter a location and a file spec."))
         ip, port, user, pw = self.sftp_params()
         label = re.sub(r"[^A-Za-z0-9]+", "_", self.v_preset.get()).strip("_")[:30]
         ts = stamp()
@@ -1237,12 +1354,12 @@ class App(tk.Tk):
             name = n.get("hostname") or n["host"]
             rel = f"export/{name}/{label}-{ts}"
             local = self.root(*rel.split("/"))
-            self.ex_picker.set_status(n["host"], "exporting…", "run")
+            self.ex_picker.set_status(n["host"], _("exporting…"), "run")
             with self.shell(n["host"]) as sh:
                 ops.file_get(sh, loc, spec, opt, ip, user, pw, "/" + rel, sftp_port=port,
                              on_output=self.cli_out(n["host"]), cancel=self.cancel)
             count = sum(len(fs) for _, _, fs in os.walk(local))
-            self.ex_picker.set_status(n["host"], f"✓ {count} file(s) → {local}", "ok")
+            self.ex_picker.set_status(n["host"], "✓ " + _("{n} file(s)", n=count) + f" → {local}", "ok")
             self.log(f"[{n['host']}] exported {count} file(s) to {local}")
 
         res = run_on_nodes(nodes, one, parallel=True, log=self.log)
@@ -1260,10 +1377,10 @@ class App(tk.Tk):
         if custom:
             items.append(("Custom", custom))
         if not items:
-            messagebox.showwarning(APP, "Select at least one inventory item.")
+            messagebox.showwarning(APP, _("Select at least one inventory item."))
             return
         if not self.v_axluser.get().strip() or not self.v_axlpw.get():
-            messagebox.showwarning(APP, "Enter the AXL application user and password on the Cluster tab.")
+            messagebox.showwarning(APP, _("Enter the AXL application user and password on the Cluster tab."))
             return
         path = filedialog.asksaveasfilename(defaultextension=".xlsx", initialdir=self.root("export"),
                                             initialfile=f"CUCM-inventory-{stamp()}.xlsx",
@@ -1281,8 +1398,8 @@ class App(tk.Tk):
     def cupi(self):
         user, pw = self.v_cupiuser.get().strip(), self.v_cupipw.get()
         if not user or not pw:
-            raise CLIError("Enter the Unity Connection CUPI (application administrator) user and password "
-                           "on the Cluster tab.")
+            raise CLIError(_("Enter the Unity Connection CUPI (application administrator) user and password "
+                             "on the Cluster tab."))
         return cuc_ops.CUPI(self.publisher("cuc"), user, pw)
 
     def _cupi_export(self):
@@ -1291,10 +1408,10 @@ class App(tk.Tk):
         if custom:
             items.append(("Custom", custom))
         if not items:
-            messagebox.showwarning(APP, "Select at least one inventory item.")
+            messagebox.showwarning(APP, _("Select at least one inventory item."))
             return
         if not self.v_cupiuser.get().strip() or not self.v_cupipw.get():
-            messagebox.showwarning(APP, "Enter the Unity Connection CUPI user and password on the Cluster tab.")
+            messagebox.showwarning(APP, _("Enter the Unity Connection CUPI user and password on the Cluster tab."))
             return
         path = filedialog.asksaveasfilename(defaultextension=".xlsx", initialdir=self.root("export"),
                                             initialfile=f"CUC-inventory-{stamp()}.xlsx",
@@ -1316,28 +1433,28 @@ class App(tk.Tk):
     def _tab_console(self, f):
         top = ttk.Frame(f)
         top.pack(fill="x")
-        ttk.Label(top, text="Node").pack(side="left")
+        ttk.Label(top, text=_("Node")).pack(side=self.S)
         self.v_cnode = tk.StringVar()
         self.cnode_cb = ttk.Combobox(top, textvariable=self.v_cnode, width=36)
-        self.cnode_cb.pack(side="left", padx=6)
-        self.c_conn_btn = ttk.Button(top, text="Connect", style="Accent.TButton", command=self._console_connect)
-        self.c_conn_btn.pack(side="left")
-        ttk.Button(top, text="Disconnect", command=self._console_disconnect).pack(side="left", padx=6)
-        self.c_state = ttk.Label(top, text="not connected", style="Muted.TLabel")
-        self.c_state.pack(side="left", padx=10)
+        self.cnode_cb.pack(side=self.S, padx=6)
+        self.c_conn_btn = ttk.Button(top, text=_("Connect"), style="Accent.TButton", command=self._console_connect)
+        self.c_conn_btn.pack(side=self.S)
+        ttk.Button(top, text=_("Disconnect"), command=self._console_disconnect).pack(side=self.S, padx=6)
+        self.c_state = ttk.Label(top, text=_("not connected"), style="Muted.TLabel")
+        self.c_state.pack(side=self.S, padx=10)
 
         quick = ttk.Frame(f)
         quick.pack(fill="x", pady=6)
-        ttk.Label(quick, text="Quick command").pack(side="left")
+        ttk.Label(quick, text=_("Quick command")).pack(side=self.S)
         cmds = ["show version active", "show network cluster", "show status", "utils service list",
                 "utils dbreplication runtimestate", "utils ntp status", "utils system upgrade status",
                 "utils disaster_recovery status backup"] + cuc_ops.CONSOLE_COMMANDS
         self.v_quick = tk.StringVar(value=cmds[0])
         ttk.Combobox(quick, textvariable=self.v_quick, values=cmds, state="readonly",
-                     width=40).pack(side="left", padx=6)
-        ttk.Button(quick, text="Run", command=lambda: self._console_send(self.v_quick.get())).pack(side="left")
-        ttk.Label(quick, text="('show cuc …' commands are for Unity Connection nodes)",
-                  style="Muted.TLabel").pack(side="left", padx=10)
+                     width=40).pack(side=self.S, padx=6)
+        ttk.Button(quick, text=_("Run"), command=lambda: self._console_send(self.v_quick.get())).pack(side=self.S)
+        ttk.Label(quick, text=_("('show cuc …' commands are for Unity Connection nodes)"),
+                  style="Muted.TLabel").pack(side=self.S, padx=10)
 
         self.term = scrolledtext.ScrolledText(f, bg="#0B1220", fg="#E5E7EB", insertbackground="white",
                                               font=("Consolas", 10), state="disabled", relief="flat")
@@ -1346,13 +1463,13 @@ class App(tk.Tk):
         bot.pack(fill="x", pady=(6, 0))
         self.v_cmd = tk.StringVar()
         e = ttk.Entry(bot, textvariable=self.v_cmd, font=("Consolas", 10))
-        e.pack(side="left", fill="x", expand=True)
+        e.pack(side=self.S, fill="x", expand=True)
         e.bind("<Return>", lambda ev: self._console_send(self.v_cmd.get()))
-        ttk.Button(bot, text="Send", command=lambda: self._console_send(self.v_cmd.get())).pack(side="left", padx=4)
-        ttk.Button(bot, text="Send password (masked)", command=self._console_pw).pack(side="left")
-        ttk.Button(bot, text="Ctrl-C", command=lambda: self._console_raw("\x03")).pack(side="left", padx=4)
-        ttk.Label(f, style="Muted.TLabel", text="Live CLI session - answer any interactive question here "
-                  "(type the answer and press Enter).").pack(anchor="w")
+        ttk.Button(bot, text=_("Send"), command=lambda: self._console_send(self.v_cmd.get())).pack(side=self.S, padx=4)
+        ttk.Button(bot, text=_("Send password (masked)"), command=self._console_pw).pack(side=self.S)
+        ttk.Button(bot, text=_("Ctrl-C"), command=lambda: self._console_raw("\x03")).pack(side=self.S, padx=4)
+        ttk.Label(f, style="Muted.TLabel", text=_("Live CLI session - answer any interactive question here "
+                                                  "(type the answer and press Enter).")).pack(anchor=self.W)
 
     def _console_nodes(self):
         vals = [f"{n['host']}  ({n.get('hostname', '')} {n.get('type', '')} {n.get('role', '')})" for n in self.nodes]
@@ -1363,20 +1480,20 @@ class App(tk.Tk):
     def _console_connect(self):
         host = self.v_cnode.get().split()[0] if self.v_cnode.get().strip() else ""
         if not host:
-            messagebox.showwarning(APP, "Pick or type a node address.")
+            messagebox.showwarning(APP, _("Pick or type a node address."))
             return
         self._console_disconnect()
-        self.c_state.configure(text=f"connecting to {host}…", style="Muted.TLabel")
+        self.c_state.configure(text=_("connecting to {host}…", host=host), style="Muted.TLabel")
 
         def run():
             try:
                 sh = self.shell(host)
                 sh.connect()
             except Exception as e:
-                self.ui(self.c_state.configure, {"text": f"failed: {e}", "style": "Bad.TLabel"})
+                self.ui(self.c_state.configure, {"text": _("failed: {err}", err=e), "style": "Bad.TLabel"})
                 return
             self.console_shell = sh
-            self.ui(self.c_state.configure, {"text": f"connected to {host}", "style": "Ok.TLabel"})
+            self.ui(self.c_state.configure, {"text": _("connected to {host}", host=host), "style": "Ok.TLabel"})
             self.ui(self._append, self.term, f"--- connected to {host} ---\nadmin:")
             while self.console_shell is sh and sh.alive:
                 try:
@@ -1389,7 +1506,7 @@ class App(tk.Tk):
                     break
                 threading.Event().wait(0.1)
             self.ui(self._append, self.term, "\n--- session closed ---\n")
-            self.ui(self.c_state.configure, {"text": "not connected", "style": "Muted.TLabel"})
+            self.ui(self.c_state.configure, {"text": _("not connected"), "style": "Muted.TLabel"})
         threading.Thread(target=run, daemon=True).start()
 
     def _console_disconnect(self):
@@ -1399,7 +1516,7 @@ class App(tk.Tk):
 
     def _console_raw(self, text):
         if not (self.console_shell and self.console_shell.alive):
-            messagebox.showinfo(APP, "Connect the console first.")
+            messagebox.showinfo(APP, _("Connect the console first."))
             return
         self.console_shell.send_raw(text)
 
@@ -1409,16 +1526,16 @@ class App(tk.Tk):
 
     def _console_pw(self):
         from tkinter import simpledialog
-        pw = simpledialog.askstring(APP, "Password to send:", show="•", parent=self)
+        pw = simpledialog.askstring(APP, _("Password to send:"), show="•", parent=self)
         if pw is not None:
             self._console_raw(pw + "\n")
 
     # ----------------------------------------------------------------------
     def _on_close(self):
-        if self.busy and not messagebox.askyesno(APP, "An operation is running. Close anyway?"):
+        if self.busy and not messagebox.askyesno(APP, _("An operation is running. Close anyway?")):
             return
         if self.server and self.server.running and self.server._transports and \
-                not messagebox.askyesno(APP, "CUCM is transferring files over SFTP. Close anyway?"):
+                not messagebox.askyesno(APP, _("CUCM is transferring files over SFTP. Close anyway?")):
             return
         self._save_cfg()
         self._console_disconnect()
