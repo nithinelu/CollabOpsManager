@@ -132,6 +132,7 @@ class App(tk.Tk):
         self.transfers = {}
         self.console_shell = None
         self._partial = {}
+        self.macd_state = {}               # MACD tab's AXL connection; survives a language switch
         os.makedirs(LOG_DIR, exist_ok=True)
         os.makedirs(REPORT_DIR, exist_ok=True)
         self._style()
@@ -453,6 +454,7 @@ class App(tk.Tk):
                     foreground=NAVY, relief="flat")
         s.configure("TProgressbar", background=TEAL, troughcolor="#E3E8F0")
         s.configure("Muted.TLabel", foreground=MUTED)
+        s.configure("Status.TLabel", foreground=MUTED)
         s.configure("Ok.TLabel", foreground=GREEN)
         s.configure("Bad.TLabel", foreground=RED)
         s.configure("Head.TLabel", foreground=NAVY, font=("Segoe UI", fs + 2, "bold"))
@@ -489,6 +491,10 @@ class App(tk.Tk):
         self.lang_cb.bind("<<ComboboxSelected>>", self._language_picked)
         self.lang_cb.pack(side=self.E, padx=(4, 12))
         ttk.Label(bar, text="Language / اللغة").pack(side=self.E)
+        credit = ttk.Label(bar, text=_("© 2026 Nithin Eluvathingal  ·  MIT License"), style="Muted.TLabel",
+                           cursor="hand2")
+        credit.pack(side=self.E, padx=(0, 24))
+        credit.bind("<Button-1>", lambda e: os.startfile(os.path.join(HERE, "LICENSE")))
 
         pw = ttk.PanedWindow(self, orient="vertical")
         pw.pack(fill="both", expand=True, padx=8, pady=(6, 0))
@@ -505,7 +511,8 @@ class App(tk.Tk):
         first = None
         for title, builder in (("Cluster", self._tab_cluster), ("SFTP Server", self._tab_sftp),
                                ("Backup (DRS)", self._tab_backup), ("Upgrade / COP", self._tab_upgrade),
-                               ("Data Export", self._tab_export), ("CLI Console", self._tab_console)):
+                               ("MACD", self._tab_macd), ("Data Export", self._tab_export),
+                               ("CLI Console", self._tab_console)):
             f = ttk.Frame(self.nb, padding=14)
             if self.rtl and first is not None:
                 self.nb.insert(0, f, text=_(title))      # tabs read right to left
@@ -1261,6 +1268,14 @@ class App(tk.Tk):
             self.log(f"[{n['host']}] {title}:\n{out}")
             self.up_picker.set_status(n["host"], _("{title}: done", title=title), "ok")
         run_on_nodes(nodes, one, parallel=parallel, log=self.log)
+
+    # ======================================================================
+    # MACD tab (Move / Add / Change / Delete over AXL)
+    # ======================================================================
+    def _tab_macd(self, f):
+        from macd_panel import MacdPanel
+        self.macd_panel = MacdPanel(f, self)
+        self.macd_panel.pack(fill="both", expand=True)
 
     # ======================================================================
     # Data export tab

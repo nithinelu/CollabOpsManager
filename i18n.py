@@ -25,6 +25,11 @@ def is_rtl():
     return _lang == "ar"
 
 
+def en(text, **kw):
+    """Always English - for activity-log lines (the log also carries CUCM's English messages)."""
+    return text.format(**kw) if kw else text
+
+
 def _(text, **kw):
     out = AR.get(text, text) if _lang == "ar" else text
     if kw:
@@ -48,6 +53,8 @@ AR = {
     "CUCM · IM&P · Unity Connection  —  Backup · Upgrade · COP · Export · built-in SFTP":
         "CUCM · IM&P · Unity Connection  —  نسخ احتياطي · ترقية · COP · تصدير · خادم SFTP مدمج",
     "Ready": "جاهز",
+    # the name keeps its left-to-right order inside the Arabic line (LRE ... PDF)
+    "© 2026 Nithin Eluvathingal  ·  MIT License": "‪© 2026 Nithin Eluvathingal‬  ·  رخصة MIT",
     "Running: {title} ...": "جارٍ التنفيذ: {title} ...",
     "Running": "قيد التشغيل",
     "{title} failed:": "فشلت العملية: {title}",
@@ -293,4 +300,21 @@ AR = {
     "Pick or type a node address.": "اختر أو اكتب عنوان العقدة.",
     "Connect the console first.": "قم بتوصيل وحدة CLI أولاً.",
     "Password to send:": "كلمة المرور المراد إرسالها:",
+
+    # ---- MACD tab (connection bar; the screens' text comes from i18n_macd)
+    "MACD": "MACD",
+    "Connect to CUCM first (Connect, at the top of the MACD tab).":
+        "يرجى الاتصال بـ CUCM أولاً (زر اتصال أعلى تبويب MACD).",
+    "Enter the CUCM publisher, AXL user and AXL password on the Cluster tab.":
+        "أدخل الخادم الرئيسي لـ CUCM ومستخدم وكلمة مرور AXL في تبويب المجموعة.",
+    "Uses the CUCM publisher and AXL user on the Cluster tab. Every change is logged to "
+    "logs\\audit_<month>.csv, and the object is saved to backups\\ before it is changed or deleted.":
+        "يستخدم الخادم الرئيسي لـ CUCM ومستخدم AXL من تبويب المجموعة.\n"
+        "يُسجَّل كل تغيير في ملف audit داخل المجلد logs، ويُحفظ العنصر في المجلد backups قبل تعديله أو حذفه.",
+    "Loaded: {counts}": "تم التحميل: {counts}",
 }
+
+from i18n_macd import MACD_AR  # noqa: E402 - the MACD tab's text
+
+for _k, _v in MACD_AR.items():
+    AR.setdefault(_k, _v)

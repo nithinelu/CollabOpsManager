@@ -2,8 +2,9 @@
 config.json
 data/
 
-# Runtime output
+# Runtime output (MACD audit CSVs go to logs/, object snapshots to backups/)
 logs/
+backups/
 reports/
 __pycache__/
 *.pyc

@@ -25,6 +25,6 @@ def grab(i):
     bi = BIH(40, w, -h, 1, 32, 0, 0, 0, 0, 0, 0)
     ctypes.windll.gdi32.GetDIBits(mdc, bmp, 0, h, buf, ctypes.byref(bi), 0)
     Image.frombuffer("RGBA", (w, h), buf, "raw", "BGRA", 0, 1).convert("RGB").save(os.path.join(out, f"{LANG}_tab{i}.png"))
-for i in range(6):
+for i in range(len(app.nb.tabs())):
     app.nb.select(i); app.update(); time.sleep(0.3); grab(i)
 app.destroy(); print("GUI OK")
