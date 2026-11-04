@@ -270,6 +270,8 @@ AR = {
     "Custom CUPI path (optional, e.g. /vmrest/users?query=(alias%20startswith%20a)):":
         "مسار CUPI مخصص (اختياري، مثال: /vmrest/users?query=(alias%20startswith%20a)):",
     "Export inventory to Excel…": "تصدير الجرد إلى Excel…",
+    "Export phones + DNs to one file…": "تصدير الهواتف والأرقام إلى ملف واحد…",
+    "Phones + DNs export": "تصدير الهواتف والأرقام",
     "Check the node(s) to export from.": "حدد العقد المراد التصدير منها.",
     "Enter a location and a file spec.": "أدخل الموقع ومواصفات الملف.",
     "exporting…": "جارٍ التصدير…",

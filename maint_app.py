@@ -1362,8 +1362,13 @@ class App(tk.Tk):
         rf.pack(side=self.S, fill="both", expand=True, padx=(0, 10) if self.rtl else (10, 0))
         self.custom_lbl = ttk.Label(rf, text="")
         self.custom_lbl.pack(anchor=self.W)
-        ttk.Button(rf, text=_("Export inventory to Excel…"), style="Accent.TButton",
-                   command=self._sql_export).pack(side="bottom", anchor=self.W, pady=(6, 0))
+        rb = ttk.Frame(rf)
+        rb.pack(side="bottom", fill="x", pady=(6, 0))
+        ttk.Button(rb, text=_("Export inventory to Excel…"), style="Accent.TButton",
+                   command=self._sql_export).pack(side=self.S)
+        self.combo_btn = ttk.Button(rb, text=_("Export phones + DNs to one file…"), style="Accent.TButton",
+                                    command=self._phones_dns_export)
+        self.combo_btn.pack(side=self.S, padx=6)
         self.sql_custom = tk.Text(rf, height=5, font=("Consolas", 9), relief="solid", bd=1)
         self.sql_custom.pack(fill="both", expand=True)
         self._inv_source()
@@ -1377,6 +1382,7 @@ class App(tk.Tk):
     def _inv_source(self):
         cuc = self.v_invsrc.get() == "cuc"
         self.inv_node_cb.configure(values=self.node_choices("cuc" if cuc else "cucm"))
+        self.combo_btn.state(["disabled" if cuc else "!disabled"])
         self.sql_list.delete(0, "end")
         for name in (cuc_ops.CUPI_PRESETS if cuc else ops.SQL_PRESETS):
             self.sql_list.insert("end", name)
@@ -1450,6 +1456,29 @@ class App(tk.Tk):
             self.log(f"Inventory saved: {path} (AXL {axl.version})")
             os.startfile(path)
         self.task("Inventory export", run)
+
+    def _phones_dns_export(self):
+        """One Excel file, one sheet: every phone line with its phone and DN details."""
+        if not self.v_axluser.get().strip() or not self.v_axlpw.get():
+            messagebox.showwarning(APP, _("Enter the AXL application user and password on the Cluster tab."))
+            return
+        path = filedialog.asksaveasfilename(defaultextension=".xlsx", initialdir=self.root("export"),
+                                            initialfile=f"CUCM-phones-DNs-{stamp()}.xlsx",
+                                            filetypes=[("Excel", "*.xlsx")])
+        if not path:
+            return
+        node = self.node_address(self.v_inv_node.get())
+        user, pw = self.v_axluser.get().strip(), self.v_axlpw.get()
+
+        def run():
+            target = node or self.publisher()
+            self.log(f"Phones + DNs export from {target}")
+            axl = ops.AXLSQL(target, user, pw)
+            ops.export_to_excel([("Phones and DNs", ops.PHONES_WITH_DNS_SQL)], axl.query, path,
+                                log=self.log, cancel=self.cancel, summary_sheet=False)
+            self.log(f"Phones + DNs saved: {path} (AXL {axl.version})")
+            os.startfile(path)
+        self.task("Phones + DNs export", run)
 
     def cupi(self, node=None):
         user, pw = self.v_cupiuser.get().strip(), self.v_cupipw.get()

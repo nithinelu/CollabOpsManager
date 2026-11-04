@@ -397,6 +397,27 @@ SOAP_NS = "http://schemas.xmlsoap.org/soap/envelope/"
 AXL_VERSIONS = ["15.0", "14.0", "12.5", "12.0", "11.5", "11.0", "10.5", "10.0"]
 
 _PN = "LEFT JOIN routepartition rp ON n.fkroutepartition = rp.pkid"
+# One row per phone line: the phone's details and its DN's details side by side.
+# LEFT JOINs keep a phone with no line; a shared DN shows once per phone.
+PHONES_WITH_DNS_SQL = f"""
+    SELECT d.name AS device, d.description AS device_description, tm.name AS model, tp.name AS protocol,
+           dp.name AS device_pool, css.name AS device_css, eu.userid AS owner_user,
+           dnm.numplanindex AS line, n.dnorpattern AS dn, rp.name AS partition,
+           n.description AS dn_description, n.alertingname AS alerting_name, lcss.name AS line_css,
+           dnm.display, dnm.label, dnm.e164mask AS external_mask
+    FROM device d
+    JOIN typeclass tc ON d.tkclass = tc.enum
+    JOIN typemodel tm ON d.tkmodel = tm.enum
+    JOIN typedeviceprotocol tp ON d.tkdeviceprotocol = tp.enum
+    LEFT JOIN devicepool dp ON d.fkdevicepool = dp.pkid
+    LEFT JOIN callingsearchspace css ON d.fkcallingsearchspace = css.pkid
+    LEFT JOIN enduser eu ON d.fkenduser = eu.pkid
+    LEFT JOIN devicenumplanmap dnm ON dnm.fkdevice = d.pkid
+    LEFT JOIN numplan n ON dnm.fknumplan = n.pkid
+    {_PN}
+    LEFT JOIN callingsearchspace lcss ON n.fkcallingsearchspace_sharedlineappear = lcss.pkid
+    WHERE tc.name = 'Phone' ORDER BY d.name, dnm.numplanindex"""
+
 SQL_PRESETS = {
     "Phones": """
         SELECT d.name, d.description, tm.name AS model, tp.name AS protocol,
@@ -526,9 +547,11 @@ def export_sql_to_excel(axl, names_sql, path, log=None, cancel=None):
     return export_to_excel(names_sql, axl.query, path, log=log, cancel=cancel)
 
 
-def export_to_excel(items, fetch, path, log=None, cancel=None):
+def export_to_excel(items, fetch, path, log=None, cancel=None, summary_sheet=True):
     """items: list of (sheet_name, arg); fetch(arg) -> list of row dicts. One sheet each,
-    plus a Summary sheet. Columns are the union of the row keys, in first-seen order."""
+    plus a Summary sheet. Columns are the union of the row keys, in first-seen order.
+    summary_sheet=False: only the data sheets, and a failed query raises instead of
+    being noted in the summary."""
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment
     from openpyxl.utils import get_column_letter
@@ -544,6 +567,8 @@ def export_to_excel(items, fetch, path, log=None, cancel=None):
         try:
             rows = fetch(arg)
         except CLIError as e:
+            if not summary_sheet:
+                raise
             if log:
                 log(f"{name}: {e}")
             summary.append([name, f"ERROR: {e}", ""])
@@ -571,5 +596,7 @@ def export_to_excel(items, fetch, path, log=None, cancel=None):
     for cell in summary[1]:
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = hdr_fill
+    if not summary_sheet:
+        wb.remove(summary)
     wb.save(path)
     return path
