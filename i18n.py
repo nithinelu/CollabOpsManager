@@ -263,7 +263,7 @@ AR = {
     "e.g.": "مثال:",
     "Export files from checked nodes": "تصدير الملفات من العقد المحددة",
     "Open export folder": "فتح مجلد التصدير",
-    "Configuration inventory to Excel (publisher)": "جرد الإعدادات إلى Excel (الخادم الرئيسي)",
+    "Configuration inventory to Excel": "جرد الإعدادات إلى Excel",
     "CUCM (AXL SQL)": "CUCM ‏(AXL SQL)",
     "Unity Connection (CUPI REST)": "Unity Connection ‏(CUPI REST)",
     "Custom SQL (optional, added as sheet 'Custom'):": "استعلام SQL مخصص (اختياري، يُضاف كورقة 'Custom'):",
@@ -305,11 +305,14 @@ AR = {
     "MACD": "MACD",
     "Connect to CUCM first (Connect, at the top of the MACD tab).":
         "يرجى الاتصال بـ CUCM أولاً (زر اتصال أعلى تبويب MACD).",
-    "Enter the CUCM publisher, AXL user and AXL password on the Cluster tab.":
-        "أدخل الخادم الرئيسي لـ CUCM ومستخدم وكلمة مرور AXL في تبويب المجموعة.",
-    "Uses the CUCM publisher and AXL user on the Cluster tab. Every change is logged to "
+    "CUCM node": "عقدة CUCM",
+    "Pick a CUCM node, and enter the AXL user and password on the Cluster tab.":
+        "اختر عقدة CUCM، وأدخل مستخدم وكلمة مرور AXL في تبويب المجموعة.",
+    "This node is a subscriber. Use the publisher for changes.":
+        "هذه العقدة خادم فرعي. استخدم الخادم الرئيسي لإجراء التغييرات.",
+    "Uses the node picked here and the AXL user on the Cluster tab. Every change is logged to "
     "logs\\audit_<month>.csv, and the object is saved to backups\\ before it is changed or deleted.":
-        "يستخدم الخادم الرئيسي لـ CUCM ومستخدم AXL من تبويب المجموعة.\n"
+        "يستخدم العقدة المحددة هنا ومستخدم AXL من تبويب المجموعة.\n"
         "يُسجَّل كل تغيير في ملف audit داخل المجلد logs، ويُحفظ العنصر في المجلد backups قبل تعديله أو حذفه.",
     "Loaded: {counts}": "تم التحميل: {counts}",
 }

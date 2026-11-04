@@ -103,10 +103,49 @@ class MacdPanel(ttk.Frame):
         return r
 
     def tab(self, key):
-        f = ttk.Frame(self.nb, padding=10)
-        self.tabs[key] = f
-        self.nb.add(f, text=f"  {_(key)}  ")
+        """An inner tab. Its content scrolls when it is taller than the space available,
+        otherwise it fills the tab (so tables can still stretch)."""
+        outer = ttk.Frame(self.nb)
+        self.tabs[key] = outer
+        self.nb.add(outer, text=f"  {_(key)}  ")
+        canvas = tk.Canvas(outer, highlightthickness=0, bd=0,
+                           background=ttk.Style(self).lookup("TFrame", "background"))
+        bar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=bar.set)
+        canvas.pack(side=self.S, fill="both", expand=True)
+        f = ttk.Frame(canvas, padding=10)
+        window = canvas.create_window(0, 0, anchor="nw", window=f)
+
+        def fit(_e=None):
+            need, have = f.winfo_reqheight(), canvas.winfo_height()
+            canvas.itemconfigure(window, width=canvas.winfo_width(), height=max(need, have))
+            canvas.configure(scrollregion=(0, 0, canvas.winfo_width(), max(need, have)))
+            if need > have > 1:
+                if not bar.winfo_ismapped():
+                    bar.pack(side=self.E, fill="y", before=canvas)
+            elif bar.winfo_ismapped():
+                bar.pack_forget()
+                canvas.yview_moveto(0)
+
+        def wheel(e):
+            if f.winfo_reqheight() > canvas.winfo_height():
+                canvas.yview_scroll(-1 if e.delta > 0 else 1, "units")
+
+        canvas.bind("<Configure>", fit)
+        f.bind("<Configure>", fit)
+        # the wheel scrolls the tab while the pointer is over it, leaving lists and drop-downs alone
+        canvas.bind("<Enter>", lambda e: self.bind_all("<MouseWheel>", self._tab_wheel))
+        self._wheels = getattr(self, "_wheels", {})
+        self._wheels[str(outer)] = wheel
         return f
+
+    def _tab_wheel(self, e):
+        try:
+            if e.widget.winfo_class() in ("Treeview", "TCombobox", "Text", "Listbox", "TSpinbox"):
+                return
+            self._wheels[self.nb.select()](e)
+        except (tk.TclError, KeyError, AttributeError):
+            pass       # pointer over something else, or the window is being rebuilt
 
     # ------------------------------------------------------------------
     # plumbing: the app's activity log, status bar and busy flag
@@ -194,32 +233,38 @@ class MacdPanel(ttk.Frame):
         return "\n".join(f"{_(k)}: '{before.get(k, '')}' → '{v}'" for k, v in changes.items())
 
     # ------------------------------------------------------------------
-    # Connection: the Cluster tab's CUCM publisher + AXL login
+    # Connection: the CUCM node picked here + the Cluster tab's AXL login
     # ------------------------------------------------------------------
     def _build_connect(self):
         cfg = self.host.cfg.get("macd", {})
         bar = ttk.Frame(self)
         bar.pack(fill="x")
+        ttk.Label(bar, text=_("CUCM node")).pack(side=self.S)
+        self.c_node = ttk.Combobox(bar, textvariable=self.host.v_macd_node, width=34)
+        self.c_node.pack(side=self.S, padx=(6, 12))
         ttk.Label(bar, text=_("AXL version")).pack(side=self.S)
         self.c_ver = ttk.Combobox(bar, width=8, values=AXL_VERSIONS)
         self.c_ver.set(cfg.get("version", "14.0"))
         self.c_ver.pack(side=self.S, padx=6)
         self.c_verify = tk.BooleanVar(value=cfg.get("verify_tls", False))
         ttk.Checkbutton(bar, text=_("Verify TLS certificate"), variable=self.c_verify).pack(side=self.S, padx=6)
-        ttk.Button(bar, style="Accent.TButton", text=_("Connect"), command=self.connect).pack(side=self.S, padx=6)
-        ttk.Button(bar, text=_("Detect version + connect"),
-                   command=lambda: self.connect(detect=True)).pack(side=self.S)
-        ttk.Button(bar, text=_("Reload drop-down lists"), command=self.load_lists).pack(side=self.S, padx=6)
+        btns = ttk.Frame(self)
+        btns.pack(fill="x", pady=(6, 0))
+        ttk.Button(btns, style="Accent.TButton", text=_("Connect"), command=self.connect).pack(side=self.S)
+        ttk.Button(btns, text=_("Detect version + connect"),
+                   command=lambda: self.connect(detect=True)).pack(side=self.S, padx=6)
+        ttk.Button(btns, text=_("Reload drop-down lists"), command=self.load_lists).pack(side=self.S)
         self.c_info = ttk.Label(self, style="Status.TLabel", justify=self.J, text=_(
-            "Uses the CUCM publisher and AXL user on the Cluster tab. Every change is logged to "
+            "Uses the node picked here and the AXL user on the Cluster tab. Every change is logged to "
             "logs\\audit_<month>.csv, and the object is saved to backups\\ before it is changed or deleted."))
         self.c_info.pack(anchor=self.W, pady=(4, 0))
 
     def connect(self, detect=False):
         h = self.host
-        host, user, pw = h.v_pub.get().strip(), h.v_axluser.get().strip(), h.v_axlpw.get()
+        host = h.node_address(h.v_macd_node.get()) or h.v_pub.get().strip()
+        user, pw = h.v_axluser.get().strip(), h.v_axlpw.get()
         if not (host and user and pw):
-            messagebox.showwarning(title(), _("Enter the CUCM publisher, AXL user and AXL password on the Cluster tab."))
+            messagebox.showwarning(title(), _("Pick a CUCM node, and enter the AXL user and password on the Cluster tab."))
             return
         client = AXLClient(host, user, pw, self.c_ver.get().strip() or "14.0", 8443, self.c_verify.get())
 
@@ -250,6 +295,10 @@ class MacdPanel(ttk.Frame):
         self.c_info.configure(text=_("Connected: {host}  |  CUCM {cucm}  |  AXL {ver}  |  {user}",
                                      host=host, cucm=cucm, ver=ver, user=user) + "\n" +
                               _("Loaded: {counts}", counts=counts), style="Ok.TLabel")
+        node = self.host.node(host)
+        if node and node.get("role") == "Subscriber":
+            self.c_info.configure(text=self.c_info.cget("text") + "\n" + _(
+                "This node is a subscriber. Use the publisher for changes."), style="Bad.TLabel")
 
     def load_lists(self):
         if not self.need_conn():

@@ -208,6 +208,7 @@ class App(tk.Tk):
             if isinstance(var, tk.Variable):
                 var.set(value)
         self._bk_cur = bk_cur              # the restored v_* already hold that cluster's values
+        self._inv_source()                 # the inventory list follows the restored source
         self._list_backups()
         for box, text in zip((self.logbox, self.clibox), logs):
             if text.strip():
@@ -235,7 +236,10 @@ class App(tk.Tk):
             "sftp_password": protect(self.v_spw.get()),
             "sftp_autostart": bool(self.v_autostart.get()),
             "sftp_restrict": bool(self.v_restrict.get()),
+            "macd_node": self.v_macd_node.get().strip(),
         })
+        if self.v_invsrc.get() == "cucm":      # a Unity Connection pick must not come back as a CUCM node
+            c["inv_node"] = self.v_inv_node.get().strip()
         self._bk_store()
         b = self.bk_settings["cucm"]
         c.update({"drs_device": b["device"], "drs_keep": b["keep"], "drs_features": b["features"],
@@ -371,6 +375,26 @@ class App(tk.Tk):
             name = "Unity Connection" if cluster == "cuc" else "CUCM"
             raise CLIError(_("Enter the {name} publisher address on the Cluster tab.", name=_(name)))
         return pub
+
+    def node_choices(self, cluster="cucm"):
+        """Drop-down labels of a cluster's AXL / CUPI capable nodes, publisher first (IM&P has no CUCM AXL)."""
+        found = [n for n in self.nodes if self.cluster_of(n["host"]) == cluster and n.get("type") != "IM&P"]
+        found.sort(key=lambda n: n.get("role") != "Publisher")
+        return [f"{n['host']}  ({n.get('hostname', '')}, {n.get('role', '')})" for n in found]
+
+    @staticmethod
+    def node_address(label):
+        """'10.1.1.1  (cucmpub, Publisher)' or a typed address -> the address."""
+        return label.split()[0] if label.strip() else ""
+
+    def _refresh_node_boxes(self):
+        """New node list: fill the two node drop-downs; an empty one takes the publisher."""
+        for box, var, cluster in ((self.macd_panel.c_node, self.v_macd_node, "cucm"),
+                                  (self.inv_node_cb, self.v_inv_node, self.v_invsrc.get())):
+            choices = self.node_choices(cluster)
+            box.configure(values=choices)
+            if not var.get().strip() and choices:
+                var.set(choices[0])
 
     def publishers(self):
         """{cluster: publisher} for every configured cluster."""
@@ -526,7 +550,7 @@ class App(tk.Tk):
 
     def _console(self, parent):
         fr = ttk.Frame(parent)
-        box = scrolledtext.ScrolledText(fr, height=9, bg="#111827", fg="#D1D5DB", insertbackground="white",
+        box = scrolledtext.ScrolledText(fr, height=6, bg="#111827", fg="#D1D5DB", insertbackground="white",
                                         font=("Consolas", 9), state="disabled", relief="flat")
         box.pack(fill="both", expand=True)
         box.holder = fr
@@ -632,6 +656,7 @@ class App(tk.Tk):
             self.conn_pill.configure(text=f"  ● {pub.get('hostname') or pub['host']}  |  {count}  ",
                                      bg=GREEN)
         self._console_nodes()
+        self._refresh_node_boxes()
 
     def _discover(self):
         pubs = {cl: v.get().strip() for cl, v in (("cucm", self.v_pub), ("cuc", self.v_cucpub)) if v.get().strip()}
@@ -1274,6 +1299,7 @@ class App(tk.Tk):
     # ======================================================================
     def _tab_macd(self, f):
         from macd_panel import MacdPanel
+        self.v_macd_node = tk.StringVar(value=self.cfg.get("macd_node", ""))
         self.macd_panel = MacdPanel(f, self)
         self.macd_panel.pack(fill="both", expand=True)
 
@@ -1317,14 +1343,18 @@ class App(tk.Tk):
                    command=lambda: self.task("File export", self._file_export)).pack(side=self.S)
         ttk.Button(eb, text=_("Open export folder"), command=lambda: os.startfile(self.root("export"))).pack(side=self.S, padx=6)
 
-        af = ttk.LabelFrame(f, text=_("Configuration inventory to Excel (publisher)"), padding=10)
+        af = ttk.LabelFrame(f, text=_("Configuration inventory to Excel"), padding=10)
         af.pack(fill="both", expand=True, pady=(10, 0))
         self.v_invsrc = tk.StringVar(value="cucm")
         src = ttk.Frame(af)
         src.pack(fill="x", pady=(0, 6))
         for val, text in (("cucm", "CUCM (AXL SQL)"), ("cuc", "Unity Connection (CUPI REST)")):
             ttk.Radiobutton(src, text=_(text), value=val, variable=self.v_invsrc,
-                            command=self._inv_source).pack(side=self.S, padx=(0, 14))
+                            command=self._inv_source_picked).pack(side=self.S, padx=(0, 14))
+        ttk.Label(src, text=_("Node")).pack(side=self.S, padx=(10, 6))
+        self.v_inv_node = tk.StringVar(value=self.cfg.get("inv_node", ""))
+        self.inv_node_cb = ttk.Combobox(src, textvariable=self.v_inv_node, width=38)
+        self.inv_node_cb.pack(side=self.S)
         self.sql_list = tk.Listbox(af, selectmode="multiple", height=7, exportselection=False,
                                    font=("Segoe UI", 10), relief="solid", bd=1)
         self.sql_list.pack(side=self.S, fill="y")
@@ -1338,8 +1368,15 @@ class App(tk.Tk):
         self.sql_custom.pack(fill="both", expand=True)
         self._inv_source()
 
+    def _inv_source_picked(self):
+        """The other cluster was picked: its publisher replaces the node of the previous one."""
+        choices = self.node_choices(self.v_invsrc.get())
+        self.v_inv_node.set(choices[0] if choices else "")
+        self._inv_source()
+
     def _inv_source(self):
         cuc = self.v_invsrc.get() == "cuc"
+        self.inv_node_cb.configure(values=self.node_choices("cuc" if cuc else "cucm"))
         self.sql_list.delete(0, "end")
         for name in (cuc_ops.CUPI_PRESETS if cuc else ops.SQL_PRESETS):
             self.sql_list.insert("end", name)
@@ -1402,20 +1439,24 @@ class App(tk.Tk):
                                             filetypes=[("Excel", "*.xlsx")])
         if not path:
             return
+        node = self.node_address(self.v_inv_node.get())
+        user, pw = self.v_axluser.get().strip(), self.v_axlpw.get()
 
         def run():
-            axl = ops.AXLSQL(self.publisher(), self.v_axluser.get().strip(), self.v_axlpw.get())
+            target = node or self.publisher()
+            self.log(f"Inventory export from {target}")
+            axl = ops.AXLSQL(target, user, pw)
             ops.export_sql_to_excel(axl, items, path, log=self.log, cancel=self.cancel)
             self.log(f"Inventory saved: {path} (AXL {axl.version})")
             os.startfile(path)
         self.task("Inventory export", run)
 
-    def cupi(self):
+    def cupi(self, node=None):
         user, pw = self.v_cupiuser.get().strip(), self.v_cupipw.get()
         if not user or not pw:
             raise CLIError(_("Enter the Unity Connection CUPI (application administrator) user and password "
                              "on the Cluster tab."))
-        return cuc_ops.CUPI(self.publisher("cuc"), user, pw)
+        return cuc_ops.CUPI(node or self.publisher("cuc"), user, pw)
 
     def _cupi_export(self):
         items = [(self.sql_list.get(i), self.sql_list.get(i)) for i in self.sql_list.curselection()]
@@ -1433,9 +1474,11 @@ class App(tk.Tk):
                                             filetypes=[("Excel", "*.xlsx")])
         if not path:
             return
+        node = self.node_address(self.v_inv_node.get())
 
         def run():
-            api = self.cupi()
+            self.log(f"Inventory export from {node or 'the Unity Connection publisher'}")
+            api = self.cupi(node)
             ops.export_to_excel(items, lambda arg: cuc_ops.fetch_preset(api, arg), path,
                                 log=self.log, cancel=self.cancel)
             self.log(f"Unity Connection inventory saved: {path} (CUC {api.version()})")
