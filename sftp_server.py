@@ -269,13 +269,19 @@ class SFTPServer:
         os.makedirs(self.root, exist_ok=True)
         self.host_key = load_host_key(self.host_key_path)
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # SO_REUSEADDR on Windows lets a second server share the port with no error, and connections
+        # then land on either one. Exclusive use makes the conflict a clear error instead.
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        else:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             sock.bind((self.bind, self.port))
         except OSError as e:
             sock.close()
-            raise OSError(f"Cannot listen on {self.bind}:{self.port} - {e.strerror or e}. "
-                          "Another SFTP/SSH server may already be using this port.") from e
+            raise OSError(f"Cannot listen on {self.bind}:{self.port} - {e.strerror or e}.\n\n"
+                          "Another program is using this port, for example CallBill, a second copy of "
+                          "this tool or OpenSSH Server. Close it and start the SFTP server again.") from e
         sock.listen(20)
         sock.settimeout(1.0)
         self._sock = sock

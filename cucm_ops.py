@@ -84,6 +84,10 @@ def health_check(sh, include_diagnose=False, on_output=None, cancel=None, comman
 # --------------------------------------------------------------------------
 DEFAULT_FEATURES = "UCM,CDR_CAR"
 
+# CUCM's failure line is "Executed command unsuccessfully", so a bare "success" test reads it as success.
+SUCCEEDED = re.compile(r"(?<!un)success", re.I)
+REFUSED = re.compile(r"unsuccessful", re.I)
+
 
 def drs_device_list(sh):
     return sh.run("utils disaster_recovery device list", timeout=120)
@@ -104,15 +108,15 @@ def drs_add_device(sh, name, path, sftp_ip, sftp_user, sftp_password, keep=3, re
         sh.log(f"[{sh.host}] backup device {name} exists - recreating it")
         drs_delete_device(sh, name)
         out = sh.run(cmd, responders=resp, timeout=180)
-    if re.search(r"error|fail|invalid|unable", out, re.I) and not re.search(r"success", out, re.I):
-        raise CLIError(f"DRS device add failed:\n{out}")
+    if REFUSED.search(out) or not SUCCEEDED.search(out):
+        raise CLIError(f"CUCM did not save the backup device:\n{out}")
     return out
 
 
 def drs_start_backup(sh, features, device):
     feats = ",".join(f.strip() for f in features.replace(" ", ",").split(",") if f.strip())
     out = sh.run(f"utils disaster_recovery backup network {feats} {device}", timeout=300)
-    if not re.search(r"initiated|started|success", out, re.I):
+    if REFUSED.search(out) or not (SUCCEEDED.search(out) or re.search(r"initiated|started", out, re.I)):
         raise CLIError(f"Backup did not start:\n{out}")
     return out
 
@@ -139,21 +143,30 @@ def drs_status(sh, kind="backup"):
 
 def drs_finished(st):
     s = st["status"].upper()
-    if any(k in s for k in ("SUCCESS", "COMPLETED", "ERROR", "FAIL", "CANCEL", "WARNING")):
+    if any(k in s for k in ("ERROR", "FAIL", "CANCEL", "WARNING")):
         return True
-    return st["percent"] == 100
+    if st["percent"] is not None:
+        return st["percent"] >= 100
+    return "SUCCESS" in s or "COMPLETED" in s
 
 
-def drs_wait(sh, poll=15, cancel=None, on_status=None, timeout=6 * 3600):
+def drs_wait(sh, poll=15, cancel=None, on_status=None, timeout=6 * 3600, previous_tar="", grace=300):
+    """Follow a backup to its end. CUCM keeps showing the last backup's result until the new one
+    registers, so a status still naming previous_tar is not the new backup's result."""
     start = time.time()
     while True:
         if cancel is not None and cancel.is_set():
             raise CLIError("stopped watching (the backup keeps running on CUCM)")
         st = drs_status(sh)
-        if on_status:
-            on_status(st)
-        if drs_finished(st):
-            return st
+        stale = bool(previous_tar) and st["tar"] == previous_tar
+        if stale and time.time() - start > grace:
+            raise CLIError(f"CUCM accepted the backup but still shows the previous one after "
+                           f"{grace // 60} minutes:\n{st['raw']}")
+        if not stale:
+            if on_status:
+                on_status(st)
+            if drs_finished(st):
+                return st
         if time.time() - start > timeout:
             raise CLIError("backup still running after the time limit")
         for _ in range(poll * 10):
@@ -256,9 +269,8 @@ def upgrade_initiate(sh, sftp_ip, sftp_user, sftp_password, directory, filename,
         return True, offered
     if problem:
         raise CLIError(problem["msg"])
-    ok = bool(re.search(r"successful|completed successfully|installed successfully|"
-                        r"Upgrade completed|The upgrade .* complete", out, re.I)) and \
-        not re.search(r"\b(failed|failure)\b", out, re.I)
+    ok = bool(re.search(r"(?<!un)successful|Upgrade completed|The upgrade .* complete", out, re.I)) and \
+        not re.search(r"\b(failed|failure)\b", out, re.I) and not REFUSED.search(out)
     return ok, out
 
 
@@ -336,7 +348,7 @@ def file_get(sh, location, spec, options, sftp_ip, sftp_user, sftp_password, rem
                  on_output=on_output, cancel=cancel)
     if re.search(r"No files matched|not found|Invalid", out, re.I):
         raise CLIError(out.strip()[-600:])
-    if re.search(r"Transfer failed|error|fail", out, re.I) and not \
+    if re.search(r"Transfer failed|error|fail|unsuccessful", out, re.I) and not \
             re.search(r"Transfer completed", out, re.I):
         raise CLIError(out.strip()[-600:])
     return out

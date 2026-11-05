@@ -170,6 +170,8 @@ AR = {
         "يرى CUCM المجلد الجذر على أنه / ، لذا يكون مجلد النسخ \u200e/backup\u200e ومجلد الترقية \u200e/upgrade\u200e عنده.",
     "Running - CUCM connects to {ip} as {user}": "قيد التشغيل - يتصل CUCM بـ {ip} باسم {user}",
     "Stopped": "متوقف",
+    "CUCM is transferring files over SFTP. Stopping now leaves them incomplete. Stop anyway?":
+        "يقوم CUCM بنقل ملفات عبر SFTP. سيؤدي الإيقاف الآن إلى ملفات غير مكتملة. هل تريد الإيقاف على أي حال؟",
     "Enter the publisher on the Cluster tab first (and check it resolves).":
         "أدخل الخادم الرئيسي في تبويب المجموعة أولاً (وتأكد من إمكانية الوصول إليه).",
     "Set an SFTP user and a password of at least 6 characters.": "حدد مستخدم SFTP وكلمة مرور لا تقل عن 6 أحرف.",

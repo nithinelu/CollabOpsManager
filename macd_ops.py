@@ -9,10 +9,11 @@ import csv
 import datetime as dt
 import json
 import os
+import sys
 
 from axl_client import AXLError, as_list, text_of
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__))
 LOG_DIR = os.path.join(HERE, "logs")
 BACKUP_DIR = os.path.join(HERE, "backups")
 

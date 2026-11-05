@@ -9,6 +9,7 @@ import secrets
 import shutil
 import socket
 import subprocess
+import sys
 import threading
 import time
 import tkinter as tk
@@ -24,7 +25,10 @@ from secrets_store import protect, unprotect
 from sftp_server import SFTPServer, local_ipv4_addresses, source_ip_for
 
 APP = "Collab Ops Manager"
-HERE = os.path.dirname(os.path.abspath(__file__))
+# Settings, logs, backups and the SFTP folder live next to the script or the exe; files bundled
+# inside a one-file exe (icon, logo, licence) are unpacked to a temporary folder (sys._MEIPASS).
+HERE = os.path.dirname(sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__))
+RES = getattr(sys, "_MEIPASS", HERE)
 CONFIG = os.path.join(HERE, "config.json")
 LOG_DIR = os.path.join(HERE, "logs")
 REPORT_DIR = os.path.join(HERE, "reports")
@@ -116,7 +120,7 @@ class App(tk.Tk):
         super().__init__()
         self.title(APP)
         try:
-            self.iconbitmap(default=os.path.join(HERE, "app.ico"))     # title bar, taskbar, dialogs
+            self.iconbitmap(default=os.path.join(RES, "app.ico"))     # title bar, taskbar, dialogs
         except tk.TclError:
             pass
         self.geometry("1180x860")
@@ -133,6 +137,7 @@ class App(tk.Tk):
         self.console_shell = None
         self._partial = {}
         self.macd_state = {}               # MACD tab's AXL connection; survives a language switch
+        self._ip_auto = not self.cfg.get("sftp_ip")   # first run: follow the route to the publisher
         os.makedirs(LOG_DIR, exist_ok=True)
         os.makedirs(REPORT_DIR, exist_ok=True)
         self._style()
@@ -412,6 +417,10 @@ class App(tk.Tk):
             raise CLIError(_("Set the 'IP address CUCM uses to reach this PC' on the SFTP Server tab."))
         ref = self.v_pub.get().strip() or self.v_cucpub.get().strip()
         route_ip = source_ip_for(ref) if ref else ""
+        if self._ip_auto and route_ip and ip != route_ip:
+            self.log(f"SFTP IP set to {route_ip}, the address this PC uses to reach the publisher")
+            ip = route_ip
+            self.ui(self.v_ip.set, ip)
         if ip not in local_ipv4_addresses() and ip != route_ip:
             # Typical after moving between networks (Wi-Fi / VPN / office LAN).
             if not route_ip:
@@ -446,8 +455,7 @@ class App(tk.Tk):
             return ""
         return (f"\n\nThe node ({ip}) never connected to the built-in SFTP server at "
                 f"{self.v_ip.get()}:{self.v_port.get()}. Check that this IP is reachable from the node "
-                "(no NAT / VPN in between), the Windows Firewall rule, and that nothing else "
-                "(e.g. OpenSSH Server) owns the port.")
+                "(no NAT / VPN in between) and the Windows Firewall rule.")
 
     def root(self, *sub):
         p = os.path.join(self.v_root.get().strip() or os.path.join(HERE, "sftp_root"), *sub)
@@ -487,7 +495,7 @@ class App(tk.Tk):
         head = tk.Frame(self, bg=NAVY, height=56)
         head.pack(fill="x")
         try:
-            self._logo = tk.PhotoImage(file=os.path.join(HERE, "app.png"))
+            self._logo = tk.PhotoImage(file=os.path.join(RES, "app.png"))
             tk.Label(head, image=self._logo, bg=NAVY).pack(side=self.S, padx=(14, 8))
         except tk.TclError:
             tk.Label(head, text="☎", font=("Segoe UI Symbol", 18), fg="white", bg=NAVY).pack(side=self.S, padx=(16, 4))
@@ -518,7 +526,7 @@ class App(tk.Tk):
         credit = ttk.Label(bar, text=_("© 2026 Nithin Eluvathingal  ·  MIT License"), style="Muted.TLabel",
                            cursor="hand2")
         credit.pack(side=self.E, padx=(0, 24))
-        credit.bind("<Button-1>", lambda e: os.startfile(os.path.join(HERE, "LICENSE")))
+        credit.bind("<Button-1>", lambda e: os.startfile(os.path.join(RES, "LICENSE")))
 
         pw = ttk.PanedWindow(self, orient="vertical")
         pw.pack(fill="both", expand=True, padx=8, pady=(6, 0))
@@ -914,6 +922,10 @@ class App(tk.Tk):
                                         user=self.v_suser.get().strip()), style="Ok.TLabel")
 
     def stop_sftp(self):
+        if self.transfers and not messagebox.askyesno(APP, _(
+                "CUCM is transferring files over SFTP. Stopping now leaves them incomplete. Stop anyway?"),
+                icon="warning"):
+            return
         if self.server:
             self.server.stop()
         self.server = None
@@ -1089,6 +1101,7 @@ class App(tk.Tk):
         pub = self.publisher(self._bk_cur)
         with self.shell(pub) as sh:
             self._backup_device(sh)
+            previous = ops.drs_status(sh)["tar"]     # CUCM shows this until the new backup registers
             out = ops.drs_start_backup(sh, self.v_feat.get(), self.v_dev.get().strip())
             self.log(f"Backup started on {pub}: {out.strip()}")
 
@@ -1101,7 +1114,7 @@ class App(tk.Tk):
                     for comp in st["components"]:
                         self.bk_tree.insert("", "end", values=comp)
                 self.ui(_do)
-            st = ops.drs_wait(sh, poll=15, cancel=self.cancel, on_status=show)
+            st = ops.drs_wait(sh, poll=15, cancel=self.cancel, on_status=show, previous_tar=previous)
         ok = "SUCCESS" in st["status"].upper()
         self.log(f"Backup finished: {st['status']}\n{st['raw']}")
         self.ui(self._list_backups)
@@ -1632,6 +1645,9 @@ class App(tk.Tk):
 
 
 if __name__ == "__main__":
+    if len(sys.argv) == 3 and sys.argv[1] == "--selftest":      # build check: see selftest.py
+        import selftest
+        sys.exit(selftest.run(sys.argv[2]))
     try:    # own taskbar identity, so Windows shows app.ico instead of the Python icon
         import ctypes
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("CollabOpsManager")
