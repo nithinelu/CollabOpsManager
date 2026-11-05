@@ -432,16 +432,24 @@ class App(tk.Tk):
         elif route_ip and ip != route_ip:
             self.log(f"Note: this PC reaches the publisher from {route_ip}, but the SFTP IP is {ip}. "
                      "If CUCM cannot connect, use 'Detect' on the SFTP Server tab.")
+        user, pw = self.v_suser.get().strip(), self.v_spw.get()
+        if not user or len(pw) < 6:
+            raise CLIError(_("Set an SFTP user and a password of at least 6 characters."))
         if need_running and not (self.server and self.server.running):
             self.log("Built-in SFTP server is not running - starting it")
             self.ui(self.start_sftp)
-            for _ in range(50):
+            for _attempt in range(50):
                 if self.server and self.server.running:
                     break
                 threading.Event().wait(0.1)
             if not (self.server and self.server.running):
                 raise CLIError(_("The built-in SFTP server is not running (SFTP Server tab)."))
-        return ip, int(self.v_port.get() or 22), self.v_suser.get().strip(), self.v_spw.get()
+        # CUCM is about to get these, so a running server must accept them even if the boxes were edited after it started.
+        if self.server and (self.server.username, self.server.password) != (user, pw):
+            self.server.username, self.server.password = user, pw
+            self.log("SFTP server now uses the user and password on the SFTP Server tab")
+            self.ui(self._sftp_running_ui)
+        return ip, int(self.v_port.get() or 22), user, pw
 
     def sftp_hint(self, host, since):
         """Explain a CUCM->SFTP failure when the server never even saw a TCP connection."""
