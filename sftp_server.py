@@ -23,6 +23,8 @@ import paramiko
 from paramiko import SFTPAttributes, SFTPHandle, SFTPServerInterface, SFTP_OK
 from paramiko.sftp_server import SFTPServer as _ParamikoSFTPServer
 
+QUIET_SECS = 3600       # a client logging in with another program's user name: its retries stay out of the log this long
+
 
 def _fmt_size(n):
     for unit in ("B", "KB", "MB", "GB"):
@@ -50,10 +52,23 @@ class _Auth(paramiko.ServerInterface):
         self.peer = peer
 
     def check_auth_password(self, username, password):
-        if username == self.owner.username and password == self.owner.password:
-            self.owner._log(f"{self.peer}: login OK as '{username}'")
+        o = self.owner
+        if username == o.username and password == o.password:
+            o._quiet.pop(self.peer, None)
+            o._log(f"{self.peer}: login OK as '{username}'")
             return paramiko.AUTH_SUCCESSFUL
-        self.owner._log(f"{self.peer}: login FAILED for '{username}'")
+        if username != o.username:
+            # Typical: another CUCM pushing CDR files to a different SFTP program on this PC (port 22 is ours
+            # now). It retries every few minutes: explain once, then keep its retries out of the log for an hour.
+            until, user = o._quiet.get(self.peer, (0, None))
+            if user == username and until > time.time():
+                return paramiko.AUTH_FAILED
+            o._quiet[self.peer] = (time.time() + QUIET_SECS, username)
+            o._log(f"{self.peer}: login FAILED for '{username}' - this server only accepts '{o.username}'. "
+                   "That client is meant for another SFTP server, not Collab Ops Manager; its retries are "
+                   "not logged for the next hour")
+        else:
+            self.owner._log(f"{self.peer}: login FAILED for '{username}' - wrong password")
         return paramiko.AUTH_FAILED
 
     def get_allowed_auths(self, username):
@@ -239,6 +254,8 @@ class SFTPServer:
         self._transports = []
         self._last_progress = {}
         self.seen = {}                                  # peer IP -> time of last TCP connect
+        self._quiet = {}                                # peer IP -> (until, user): a foreign client's retries
+        self._refused = {}                              # peer IP -> until: refused by the allowed IP list
 
     @property
     def running(self):
@@ -321,14 +338,23 @@ class SFTPServer:
             peer = addr[0]
             self.seen[peer] = time.time()
             if self.allowed_ips and peer not in self.allowed_ips:
-                self._log(f"{peer}: connection refused (not in allowed IP list)")
+                # e.g. a CUCM of another cluster pushing CDR files every few minutes: say it once an hour
+                if self._refused.get(peer, 0) < time.time():
+                    self._refused[peer] = time.time() + QUIET_SECS
+                    self._log(f"{peer}: connection refused - not a node of this cluster (allowed IP list). "
+                              "Its retries are not logged for the next hour")
                 client.close()
                 continue
             threading.Thread(target=self._serve, args=(client, peer), daemon=True,
                              name=f"sftp-{peer}").start()
 
+    def _quiet_now(self, peer):
+        return self._quiet.get(peer, (0, None))[0] > time.time()
+
     def _serve(self, client, peer):
-        self._log(f"{peer}: connected")
+        quiet = self._quiet_now(peer)               # a known foreign client retrying: no connect / disconnect lines
+        if not quiet:
+            self._log(f"{peer}: connected")
         t = None
         try:
             client.settimeout(None)
@@ -349,7 +375,8 @@ class SFTPServer:
                     pass
                 if t in self._transports:
                     self._transports.remove(t)
-            self._log(f"{peer}: disconnected")
+            if not (quiet and self._quiet_now(peer)):
+                self._log(f"{peer}: disconnected")
 
 
 def source_ip_for(host):

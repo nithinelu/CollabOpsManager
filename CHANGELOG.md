@@ -14,9 +14,30 @@ The Cisco IP Phone Serial Grabber is now a tab in Collab Ops Manager, after **MA
 * The settings are saved in `config.json` with the rest. The phone web password is never saved.
 * Phones need *Web Access* enabled in CUCM (Phone › Product Specific Configuration).
 
+### New: Phone Backgrounds tab
+Wallpapers for Cisco phones, after **Phone Serials**, in English and Arabic.
+
+* Resizes your pictures for each phone model and makes the full-size picture, the thumbnail and the `List.xml` in that model's TFTP folder:
+  * 79XX: 7941/7942/7961/7962 (greyscale), 7945/7965, 7970/7971, 7975
+  * 88XX: 8841, 8845, 8851, 8861, 8865 (`Desktops/800x480x24`)
+  * PhoneOS: Desk Phone 9851, 9861, 9871 and the NR models (`Desktops/DP-98xx`), and the 8875 (`Desktops/1024x600x24`)
+* The PhoneOS phones get their own List.xml format: `wallpaper-`/`thumbnail-` files, a light or dark theme per picture, and a version number.
+* Optional company logo for the PhoneOS phones (`logo.png`, listed as `Name="logo"`), scaled in proportion with its transparency kept.
+* Pictures that don't match the screen shape either fill the screen (edges cut) or show whole with black bars. A preview shows the result per model.
+* Short file names: **Rename**, or **Rename all…** to number them from one name (Wall1, Wall2, …).
+* **Save to folder…** or **Save as ZIP…** keeps the files in the TFTP folder layout, for a manual upload.
+* **Upload to TFTP servers** uploads to the ticked CUCM nodes through OS Administration (the same as *TFTP File Management*), using the OS admin login from the Cluster tab.
+  * It keeps what each `List.xml` on the server already lists, such as Cisco's default PhoneOS wallpapers, adds the new pictures at the end, and sets the version above the server's. Untick the option to replace the list.
+  * It then restarts **Cisco Tftp** through CUCM's Serviceability API with the AXL user from the Cluster tab (the CLI cannot restart feature services), and checks that the node hands out the new `List.xml`.
+* Phones show the pictures only when CUCM allows it: Common Phone Profile › *Enable End User Access to Phone Background Image Setting*.
+
+### Fixed
+* SFTP server: a client that logs in with another program's user name, such as a CUCM pushing CDR files to a billing server on the same PC, is explained once in the activity log; its retries are no longer logged every few minutes. The same goes for connections refused by the allowed IP list.
+* Dry-run report: a password echoed back in two pieces could appear in the CLI transcript. The whole transcript is now masked again before it is written.
+
 ### Other
-* New test `tests/test_serials_tab.py`. It also fails when any text on the tab has no Arabic translation.
-* No new packages: `setup.bat` installs everything the tab needs.
+* New tests: `tests/test_serials_tab.py`, `tests/test_backgrounds_tab.py` and `tests/test_sftp_foreign_login.py`. The tab tests also fail when any text has no Arabic translation.
+* New package: Pillow, for the pictures. Run `setup.bat` again after updating. Without it, only the Phone Backgrounds tab stops working.
 
 ## Version 1.0 (5 November 2026)
 

@@ -20,6 +20,7 @@ import cuc_ops
 import i18n
 import cucm_ops as ops
 import serials_panel
+import backgrounds_panel
 from i18n import _
 from cucm_cli import CUCMShell, CLIError, run_on_nodes
 from secrets_store import protect, unprotect
@@ -53,10 +54,11 @@ def stamp():
 # Node picker: check-list of cluster nodes with a per-node status column
 # --------------------------------------------------------------------------
 class NodePicker(ttk.Frame):
-    def __init__(self, parent, app, height=6, default_all=True):
+    def __init__(self, parent, app, height=6, default_all=True, keep=None):
         super().__init__(parent)
         self.app = app
         self.default_all = default_all
+        self.keep = keep or (lambda n: True)        # which cluster nodes this list shows
         self.checked = set()
         cols = ("sel", "host", "ip", "type", "role", "status")
         self.tree = ttk.Treeview(self, columns=cols, show="headings", height=height, selectmode="none")
@@ -75,13 +77,16 @@ class NodePicker(ttk.Frame):
         self.tree.tag_configure("run", foreground=AMBER)
         app.pickers.append(self)
 
+    def nodes(self):
+        return [n for n in self.app.nodes if self.keep(n)]
+
     def refresh(self):
         self.tree.delete(*self.tree.get_children())
-        known = {n["host"] for n in self.app.nodes}
+        known = {n["host"] for n in self.nodes()}
         self.checked &= known
         if not self.checked and self.default_all:
             self.checked = set(known)
-        for n in self.app.nodes:
+        for n in self.nodes():
             self.tree.insert("", "end", iid=n["host"], values=(
                 "☑" if n["host"] in self.checked else "☐", n.get("hostname", ""), n["host"],
                 n.get("type", ""), n.get("role", ""), ""))
@@ -91,9 +96,9 @@ class NodePicker(ttk.Frame):
         if not iid:
             if self.tree.identify_region(ev.x, ev.y) == "heading" and \
                     self.tree.column(self.tree.identify_column(ev.x), "id") == "sel":
-                self.checked = set() if len(self.checked) == len(self.app.nodes) else \
-                    {n["host"] for n in self.app.nodes}
-                for n in self.app.nodes:
+                self.checked = set() if len(self.checked) == len(self.nodes()) else \
+                    {n["host"] for n in self.nodes()}
+                for n in self.nodes():
                     self.tree.set(n["host"], "sel", "☑" if n["host"] in self.checked else "☐")
             return
         if iid in self.checked:
@@ -103,7 +108,7 @@ class NodePicker(ttk.Frame):
         self.tree.set(iid, "sel", "☑" if iid in self.checked else "☐")
 
     def selected(self):
-        return [n for n in self.app.nodes if n["host"] in self.checked]
+        return [n for n in self.nodes() if n["host"] in self.checked]
 
     def set_status(self, host, text, tag=""):
         def _do():
@@ -139,6 +144,7 @@ class App(tk.Tk):
         self._partial = {}
         self.macd_state = {}               # MACD tab's AXL connection; survives a language switch
         self.serials_state = serials_panel.new_state(self.cfg)   # Phone Serials results and running scan, likewise
+        self.bg_state = backgrounds_panel.new_state(self.cfg)    # Phone Backgrounds picture list, likewise
         self._ip_auto = not self.cfg.get("sftp_ip")   # first run: follow the route to the publisher
         os.makedirs(LOG_DIR, exist_ok=True)
         os.makedirs(REPORT_DIR, exist_ok=True)
@@ -216,6 +222,8 @@ class App(tk.Tk):
                 var.set(value)
         self._bk_cur = bk_cur              # the restored v_* already hold that cluster's values
         self._inv_source()                 # the inventory list follows the restored source
+        self.bg_panel.refresh_list(self.bg_panel._sel())   # name box, theme and preview follow the restored ticks
+        self.bg_panel._models_changed()
         self._list_backups()
         for box, text in zip((self.logbox, self.clibox), logs):
             if text.strip():
@@ -247,6 +255,8 @@ class App(tk.Tk):
         })
         if hasattr(self, "v_ser_node"):
             c["serials"] = serials_panel.saved_settings(self)
+        if hasattr(self, "v_bg_fit"):
+            c["backgrounds"] = backgrounds_panel.saved_settings(self)
         if self.v_invsrc.get() == "cucm":      # a Unity Connection pick must not come back as a CUCM node
             c["inv_node"] = self.v_inv_node.get().strip()
         self._bk_store()
@@ -557,6 +567,7 @@ class App(tk.Tk):
         for title, builder in (("Cluster", self._tab_cluster), ("SFTP Server", self._tab_sftp),
                                ("Backup (DRS)", self._tab_backup), ("Upgrade / COP", self._tab_upgrade),
                                ("MACD", self._tab_macd), ("Phone Serials", self._tab_serials),
+                               ("Phone Backgrounds", self._tab_backgrounds),
                                ("Data Export", self._tab_export),
                                ("CLI Console", self._tab_console)):
             f = ttk.Frame(self.nb, padding=14)
@@ -755,7 +766,7 @@ class App(tk.Tk):
         ts = stamp()
         pubs = self.publishers()
         pub = pubs.get("cucm") or pubs.get("cuc", "")
-        results, transcripts = {}, {}
+        results, transcripts, secret_sets = {}, {}, {}
 
         def one(n):
             host = n["host"]
@@ -766,6 +777,7 @@ class App(tk.Tk):
             try:
                 sh = self.shell(host)
                 sh.tap = transcripts[host].append
+                secret_sets[host] = sh.secrets              # the same set: grows as the session sends passwords
                 since = time.time()
                 with sh:
                     results[host] = ops.dry_run_node(sh, ip, user, pw, port, "/" + rel,
@@ -817,7 +829,13 @@ class App(tk.Tk):
                 fh.write("\n")
             for n in nodes:
                 fh.write(f"\n#################### CLI transcript {n['host']} ####################\n")
-                fh.write("".join(transcripts.get(n["host"], [])).replace("\r", ""))
+                text = "".join(transcripts.get(n["host"], [])).replace("\r", "")
+                # Each chunk was masked as it arrived, but a password echoed back across two chunks slips
+                # through that: mask the joined transcript again before it goes into the report.
+                for sec in sorted(secret_sets.get(n["host"], set()) | {pw}, key=len, reverse=True):
+                    if sec:
+                        text = text.replace(sec, "******")
+                fh.write(text)
         total = sum(len(r) for r in results.values())
         failed = sum(1 for r in results.values() for _, ok, _ in r if not ok)
         self.log(f"Dry run: {total - failed}/{total} checks OK. {axl_line}\nReport: {path}")
@@ -1346,6 +1364,14 @@ class App(tk.Tk):
         self.v_ser_only_ok = tk.BooleanVar(value=False)
         self.serials_panel = serials_panel.SerialsPanel(f, self)
         self.serials_panel.pack(fill="both", expand=True)
+
+    # ======================================================================
+    # Phone Backgrounds tab (wallpapers + List.xml for 79XX / 88XX / 98XX, uploaded to TFTP)
+    # ======================================================================
+    def _tab_backgrounds(self, f):
+        backgrounds_panel.make_vars(self, self.cfg)
+        self.bg_panel = backgrounds_panel.BackgroundsPanel(f, self, NodePicker)
+        self.bg_panel.pack(fill="both", expand=True)
 
     # ======================================================================
     # Data export tab

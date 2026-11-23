@@ -80,7 +80,7 @@ app.update()
 assert app.macd_panel.macd is not None and app.macd_panel.lists["partitions"] == ["PT_Internal"]
 dp_boxes = app.macd_panel.combos.get("devicePools", [])
 assert dp_boxes and list(dp_boxes[0]["values"]) == ["DP_HQ", "DP_BR"], "drop-downs refilled after rebuild"
-assert app.nb.tab(app.nb.tabs()[3], "text").strip("‫‬‏") == "MACD"
+assert "MACD" in [app.nb.tab(t, "text").strip("‫‬‏") for t in app.nb.tabs()]
 assert json.load(open(maint_app.CONFIG, encoding="utf-8"))["macd"]["version"] == "14.0"
 
 app.lang_cb.set(i18n.LANGUAGES["en"])
