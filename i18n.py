@@ -322,6 +322,7 @@ AR = {
 }
 
 from i18n_macd import MACD_AR  # noqa: E402 - the MACD tab's text
+from i18n_serials import SERIALS_AR  # noqa: E402 - the Phone Serials tab's text
 
-for _k, _v in MACD_AR.items():
+for _k, _v in {**SERIALS_AR, **MACD_AR}.items():
     AR.setdefault(_k, _v)

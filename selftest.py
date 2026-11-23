@@ -71,12 +71,12 @@ def _gui(tmp):
         json.dump({"language": "en", "sftp_root": os.path.join(tmp, "root")}, f)
     app = maint_app.App()
     app.update()
-    assert len(app.nb.tabs()) == 7 and app._logo.width() > 0
+    assert len(app.nb.tabs()) == 8 and app._logo.width() > 0
     assert os.path.exists(os.path.join(maint_app.RES, "LICENSE"))
     app.lang_cb.set(i18n.LANGUAGES["ar"])
     app._language_picked()
     app.update()
-    assert app.rtl and len(app.macd_panel.tabs) == 5
+    assert app.rtl and len(app.macd_panel.tabs) == 5 and app.serials_panel.winfo_exists()
     app.destroy()
     return "all tabs, logo, licence, Arabic switch"
 

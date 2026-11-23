@@ -19,6 +19,7 @@ from tkinter import ttk, filedialog, messagebox, scrolledtext
 import cuc_ops
 import i18n
 import cucm_ops as ops
+import serials_panel
 from i18n import _
 from cucm_cli import CUCMShell, CLIError, run_on_nodes
 from secrets_store import protect, unprotect
@@ -137,6 +138,7 @@ class App(tk.Tk):
         self.console_shell = None
         self._partial = {}
         self.macd_state = {}               # MACD tab's AXL connection; survives a language switch
+        self.serials_state = serials_panel.new_state(self.cfg)   # Phone Serials results and running scan, likewise
         self._ip_auto = not self.cfg.get("sftp_ip")   # first run: follow the route to the publisher
         os.makedirs(LOG_DIR, exist_ok=True)
         os.makedirs(REPORT_DIR, exist_ok=True)
@@ -243,6 +245,8 @@ class App(tk.Tk):
             "sftp_restrict": bool(self.v_restrict.get()),
             "macd_node": self.v_macd_node.get().strip(),
         })
+        if hasattr(self, "v_ser_node"):
+            c["serials"] = serials_panel.saved_settings(self)
         if self.v_invsrc.get() == "cucm":      # a Unity Connection pick must not come back as a CUCM node
             c["inv_node"] = self.v_inv_node.get().strip()
         self._bk_store()
@@ -290,7 +294,7 @@ class App(tk.Tk):
                 f.write(line + "\n")
         except OSError:
             pass
-        self.ui(self._append, self.logbox, line + "\n")
+        self.ui(lambda: self._append(self.logbox, line + "\n"))   # the box showing then (a language switch replaces it)
 
     def _append(self, box, text):
         box.configure(state="normal")
@@ -395,6 +399,7 @@ class App(tk.Tk):
     def _refresh_node_boxes(self):
         """New node list: fill the two node drop-downs; an empty one takes the publisher."""
         for box, var, cluster in ((self.macd_panel.c_node, self.v_macd_node, "cucm"),
+                                  (self.serials_panel.c_node, self.v_ser_node, "cucm"),
                                   (self.inv_node_cb, self.v_inv_node, self.v_invsrc.get())):
             choices = self.node_choices(cluster)
             box.configure(values=choices)
@@ -551,7 +556,8 @@ class App(tk.Tk):
         first = None
         for title, builder in (("Cluster", self._tab_cluster), ("SFTP Server", self._tab_sftp),
                                ("Backup (DRS)", self._tab_backup), ("Upgrade / COP", self._tab_upgrade),
-                               ("MACD", self._tab_macd), ("Data Export", self._tab_export),
+                               ("MACD", self._tab_macd), ("Phone Serials", self._tab_serials),
+                               ("Data Export", self._tab_export),
                                ("CLI Console", self._tab_console)):
             f = ttk.Frame(self.nb, padding=14)
             if self.rtl and first is not None:
@@ -1325,6 +1331,23 @@ class App(tk.Tk):
         self.macd_panel.pack(fill="both", expand=True)
 
     # ======================================================================
+    # Phone Serials tab (formerly Cisco IP Phone Serial Grabber)
+    # ======================================================================
+    def _tab_serials(self, f):
+        s = self.cfg.get("serials", {})
+        self.v_ser_node = tk.StringVar(value=s.get("node", ""))
+        self.v_ser_status = tk.StringVar(value=s.get("status", "Registered"))
+        self.v_ser_workers = tk.StringVar(value=str(s.get("workers", 64)))
+        self.v_ser_timeout = tk.StringVar(value=f"{s.get('timeout', 4.0):g}")
+        self.v_ser_https = tk.BooleanVar(value=s.get("https", True))
+        self.v_ser_puser = tk.StringVar(value=s.get("phone_user", ""))
+        self.v_ser_ppw = tk.StringVar()                 # never saved
+        self.v_ser_filter = tk.StringVar()
+        self.v_ser_only_ok = tk.BooleanVar(value=False)
+        self.serials_panel = serials_panel.SerialsPanel(f, self)
+        self.serials_panel.pack(fill="both", expand=True)
+
+    # ======================================================================
     # Data export tab
     # ======================================================================
     def _tab_export(self, f):
@@ -1646,6 +1669,7 @@ class App(tk.Tk):
                 not messagebox.askyesno(APP, _("CUCM is transferring files over SFTP. Close anyway?")):
             return
         self._save_cfg()
+        self.serials_state["stop"].set()
         self._console_disconnect()
         if self.server:
             self.server.stop()
