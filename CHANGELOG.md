@@ -31,10 +31,6 @@ Wallpapers for Cisco phones, after **Phone Serials**, in English and Arabic.
   * It then restarts **Cisco Tftp** through CUCM's Serviceability API with the AXL user from the Cluster tab (the CLI cannot restart feature services), and checks that the node hands out the new `List.xml`.
 * Phones show the pictures only when CUCM allows it: Common Phone Profile › *Enable End User Access to Phone Background Image Setting*.
 
-### Fixed
-* SFTP server: a client that logs in with another program's user name, such as a CUCM pushing CDR files to a billing server on the same PC, is explained once in the activity log; its retries are no longer logged every few minutes. The same goes for connections refused by the allowed IP list.
-* Dry-run report: a password echoed back in two pieces could appear in the CLI transcript. The whole transcript is now masked again before it is written.
-
 ### Other
 * New tests: `tests/test_serials_tab.py`, `tests/test_backgrounds_tab.py` and `tests/test_sftp_foreign_login.py`. The tab tests also fail when any text has no Arabic translation.
 * New package: Pillow, for the pictures. Run `setup.bat` again after updating. Without it, only the Phone Backgrounds tab stops working.
