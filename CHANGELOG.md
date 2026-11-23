@@ -14,9 +14,6 @@ The Cisco IP Phone Serial Grabber is now a tab in Collab Ops Manager, after **MA
 * The settings are saved in `config.json` with the rest. The phone web password is never saved.
 * Phones need *Web Access* enabled in CUCM (Phone › Product Specific Configuration).
 
-### Fixed
-* A line written to the activity log just before a language switch was missing from the on-screen log (it still reached the log file).
-
 ### Other
 * New test `tests/test_serials_tab.py`. It also fails when any text on the tab has no Arabic translation.
 * No new packages: `setup.bat` installs everything the tab needs.
