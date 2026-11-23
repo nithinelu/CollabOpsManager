@@ -2,6 +2,8 @@
 
 One Windows app for CUCM / IM&P and Cisco Unity Connection (CUC) maintenance that comes with its own SFTP server, so you don't need a separate SFTP application.
 
+**Version 1.1** (23 November 2026) adds the **Phone Serials** tab, which reads serial numbers, MACs and models from Cisco IP phones. See [CHANGELOG.md](CHANGELOG.md) for what changed in each version.
+
 | Tab | What it does |
 |---|---|
 | **Cluster** | Connects to the publisher over SSH using the OS admin account, finds the nodes with `show network cluster`, shows each node's active and inactive version and installed COP files, and writes a pre/post-upgrade health report. |
@@ -24,13 +26,14 @@ Enter the CUC publisher in the **Unity Connection cluster** box on the Cluster t
 Pick **العربية** in the **Language / اللغة** box at the bottom of the window. The window redraws right to left (tabs, forms, tables and buttons mirrored) and keeps what you typed, the logs and a running SFTP server. The activity log and CLI output stay English: they carry CUCM's own messages. Translations are in `i18n.py` (English text is the key).
 
 ## Setup
-1. Run `setup.bat` once. It installs the packages and adds Start Menu and Desktop shortcuts.
-2. On the SFTP Server tab, pick the IP address CUCM uses to reach this PC and click **Allow port in Windows Firewall**.
-3. Start the SFTP server. On the Cluster tab, enter the publisher and the OS admin account, then click **Connect & discover nodes**.
+1. Download version 1.1: on GitHub, open **Tags**, pick `v1.1` and download the ZIP, then unzip it to a folder of your own. If you update from an older copy, keep your `config.json`, `data`, `logs`, `backups` and `sftp_root` folders.
+2. Run `setup.bat` once. It installs the packages and adds Start Menu and Desktop shortcuts.
+3. On the SFTP Server tab, pick the IP address CUCM uses to reach this PC and click **Allow port in Windows Firewall**.
+4. Start the SFTP server. On the Cluster tab, enter the publisher and the OS admin account, then click **Connect & discover nodes**.
 
 Notes
 * CUCM sees the SFTP root as `/`. Use `/backup` for DRS and `/upgrade` for ISO/COP files.
 * Port 22 is the default. If Windows OpenSSH Server is running on this PC, it already uses 22, so stop it or use another port. Older DRS releases cannot use a different port.
 * DRS keeps the SFTP password in its backup device. If you change the password, run **Create / update backup device** again.
 * Passwords are saved only when you tick *Remember passwords*. They are encrypted with Windows DPAPI for the current user.
-* `tests/test_e2e.py`, `tests/test_dryrun.py` and `tests/test_cuc.py` run the flows against `tests/fake_cucm.py`, a simulated CLI and CUPI. They use a temporary config, never yours.
+* `tests/test_e2e.py`, `tests/test_dryrun.py` and `tests/test_cuc.py` run the flows against `tests/fake_cucm.py`, a simulated CLI and CUPI. They use a temporary config, never yours. `tests/test_macd_tab.py` and `tests/test_serials_tab.py` check the MACD and Phone Serials tabs against simulated CUCM servers and phones, in both languages.
